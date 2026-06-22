@@ -1,0 +1,15 @@
+link_url,status_code,classification,label,final_url,method,redirects,link_type,scope,source_page,error
+https://example.com/,200,ok,OK,https://example.com/,HEAD,0,a,internal,https://example.com/,
+https://example.com/about,200,ok,OK,https://example.com/about,HEAD,0,a,internal,https://example.com/,
+https://example.com/contact,200,ok,OK,https://example.com/contact,HEAD,0,a,internal,https://example.com/,
+https://example.com/css/site.css,200,ok,OK,https://example.com/css/site.css,HEAD,0,link,internal,https://example.com/,
+https://example.com/js/app.js,200,ok,OK,https://example.com/js/app.js,HEAD,0,script,internal,https://example.com/,
+https://example.com/img/logo.png,200,ok,OK,https://example.com/img/logo.png,HEAD,0,img,internal,https://example.com/,
+https://example.org/,200,ok,OK,https://example.org/,GET,0,a,external,https://example.com/about,
+http://example.com/blog,301,redirect,Redirect,https://example.com/blog,HEAD,1,a,internal,https://example.com/,
+https://example.com/old-pricing,302,redirect,Redirect,https://example.com/pricing,HEAD,1,a,internal,https://example.com/about,
+https://example.com/team/jane,404,client,"Client error",https://example.com/team/jane,GET,0,a,internal,https://example.com/about,
+https://example.com/img/banner-old.jpg,404,client,"Client error",https://example.com/img/banner-old.jpg,GET,0,img,internal,https://example.com/,
+https://example.net/partners,403,client,"Client error",https://example.net/partners,GET,0,a,external,https://example.com/contact,
+https://example.com/api/status,503,server,"Server error",https://example.com/api/status,GET,0,a,internal,https://example.com/,
+https://broken.invalid/resource,0,conn,"Connection error",https://broken.invalid/resource,GET,0,a,external,https://example.com/contact,"Could not resolve host: broken.invalid"

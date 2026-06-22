@@ -1,0 +1,1098 @@
+#!/usr/bin/env php
+<?php
+/**
+ * Broken Link Bulk Scanner  (plain PHP 8.x — cURL + DOM)
+ * ---------------------------------------------------------------------------
+ * Crawls a website and reports broken hyperlinks, similar in function to
+ * deadlinkchecker.com. It fetches pages with cURL, extracts links with
+ * DOMDocument + DOMXPath, normalises them to absolute URLs, tests each unique
+ * link (HEAD then GET fallback), follows redirects, classifies the result and
+ * produces:
+ *   - a self-contained dark-themed HTML dashboard  (link_report.html)
+ *   - a CSV export                                 (link_report.csv)
+ *   - a live console progress log + final summary
+ *
+ * The crawl logic (fetchPage, extractLinks, normalizeUrl, checkLink, crawl)
+ * is fully separated from the HTML rendering so it can be reused from a CLI
+ * cron job or a background worker.
+ *
+ * Requirements
+ *   - PHP 8.0+ with the curl + dom extensions (standard on macOS / Linux)
+ *
+ * Usage
+ *   php link_checker.php --url=https://example.com [options]
+ *
+ * Options
+ *   --url=URL            Starting page to crawl (required)
+ *   --mode=MODE          'site' = crawl entire site following internal links
+ *                        (default), 'page' = test only links on the start page
+ *   --max-pages=N        Hard cap on pages fetched in site mode (default 100)
+ *   --max-depth=N        Max crawl depth from the start page (default 3)
+ *   --concurrency=N      Parallel requests in flight (default 10)
+ *   --delay=MS           Delay between batches in ms (default 200)
+ *   --no-assets          Test <a href> only (default also tests
+ *                        <img src>, <link href>, <script src>)
+ *   --connect-timeout=S  cURL connect timeout, seconds (default 10)
+ *   --timeout=S          cURL total timeout, seconds (default 20)
+ *   --ignore-robots      Do NOT honour robots.txt (default: honour it)
+ *   --insecure           Skip TLS certificate verification
+ *   --user-agent=STR     Override the crawler User-Agent string
+ *   --output=FILE        HTML report path (default link_report.html)
+ *   --csv=FILE           CSV export path  (default link_report.csv)
+ *   --help               Show this help
+ *
+ * Examples
+ *   # Whole-site scan, up to 200 pages
+ *   php link_checker.php --url=https://example.com --max-pages=200
+ *
+ *   # Just the links on one page, no asset checks
+ *   php link_checker.php --url=https://example.com/page --mode=page --no-assets
+ */
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  CLI arguments
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DEFAULT_UA = 'BrokenLinkBulkScanner/1.0 (+link checker; cURL)';
+
+function parse_args(array $argv): array {
+    $defaults = [
+        'url'             => null,
+        'mode'            => 'site',
+        'max-pages'       => 100,
+        'max-depth'       => 3,
+        'concurrency'     => 10,       // parallel requests in flight
+        'delay'           => 200,      // ms between batches
+        'check-assets'    => true,
+        'connect-timeout' => 10,       // seconds
+        'timeout'         => 20,       // seconds
+        'max-redirs'      => 10,
+        'respect-robots'  => true,
+        'verify-tls'      => true,
+        'user-agent'      => DEFAULT_UA,
+        'output'          => 'link_report.html',
+        'csv'             => 'link_report.csv',
+    ];
+
+    $opts = getopt('', [
+        'url:', 'mode:', 'max-pages:', 'max-depth:', 'concurrency:', 'delay:', 'no-assets',
+        'connect-timeout:', 'timeout:', 'max-redirs:', 'ignore-robots',
+        'insecure', 'user-agent:', 'output:', 'csv:', 'help',
+    ]);
+
+    if (isset($opts['help']) || empty($opts['url'])) {
+        fwrite(STDOUT, <<<HELP
+
+Broken Link Bulk Scanner — crawls a site and reports dead links
+
+Usage:
+  php link_checker.php --url=URL [options]
+
+Options:
+  --url=URL            Starting page to crawl (required)
+  --mode=MODE          'site' (crawl whole site, default) | 'page' (start page only)
+  --max-pages=N        Hard cap on pages fetched in site mode (default 100)
+  --max-depth=N        Max crawl depth from the start page (default 3)
+  --concurrency=N      Parallel requests in flight (default 10)
+  --delay=MS           Delay between batches in ms (default 200)
+  --no-assets          Test <a href> only (default also tests img/link/script)
+  --connect-timeout=S  cURL connect timeout in seconds (default 10)
+  --timeout=S          cURL total timeout in seconds (default 20)
+  --max-redirs=N       Max redirects to follow per link (default 10)
+  --ignore-robots      Do NOT honour robots.txt (default: honour it)
+  --insecure           Skip TLS certificate verification
+  --user-agent=STR     Override the crawler User-Agent
+  --output=FILE        HTML report path (default link_report.html)
+  --csv=FILE           CSV export path  (default link_report.csv)
+  --help               Show this help
+
+Examples:
+  php link_checker.php --url=https://example.com --max-pages=200
+  php link_checker.php --url=https://example.com/page --mode=page --no-assets
+
+HELP);
+        exit(empty($opts['url']) && !isset($opts['help']) ? 1 : 0);
+    }
+
+    $args = array_merge($defaults, array_intersect_key($opts, $defaults));
+    $args['url']             = (string)$opts['url'];
+    $args['mode']            = (isset($opts['mode']) && strtolower($opts['mode']) === 'page') ? 'page' : 'site';
+    $args['max-pages']       = max(1, (int)($opts['max-pages'] ?? $defaults['max-pages']));
+    $args['max-depth']       = max(0, (int)($opts['max-depth'] ?? $defaults['max-depth']));
+    $args['concurrency']     = max(1, (int)($opts['concurrency'] ?? $defaults['concurrency']));
+    $args['delay']           = max(0, (int)($opts['delay'] ?? $defaults['delay']));
+    $args['connect-timeout'] = max(1, (int)($opts['connect-timeout'] ?? $defaults['connect-timeout']));
+    $args['timeout']         = max(1, (int)($opts['timeout'] ?? $defaults['timeout']));
+    $args['max-redirs']      = max(0, (int)($opts['max-redirs'] ?? $defaults['max-redirs']));
+    $args['check-assets']    = !isset($opts['no-assets']);
+    $args['respect-robots']  = !isset($opts['ignore-robots']);
+    $args['verify-tls']      = !isset($opts['insecure']);
+    $args['user-agent']      = isset($opts['user-agent']) ? (string)$opts['user-agent'] : $defaults['user-agent'];
+    $args['output']          = isset($opts['output']) ? (string)$opts['output'] : $defaults['output'];
+    $args['csv']             = isset($opts['csv']) ? (string)$opts['csv'] : $defaults['csv'];
+
+    // Make sure the start URL has a scheme.
+    if (!preg_match('#^https?://#i', $args['url'])) {
+        $args['url'] = 'https://' . ltrim($args['url'], '/');
+    }
+    return $args;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  URL helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Collapse "." / ".." path segments and lower-case the host so that the same
+ * resource always produces one identical, comparable key.
+ */
+function canonicalize(string $url): string {
+    $p = parse_url($url);
+    if ($p === false || empty($p['host'])) return $url;
+
+    $scheme = strtolower($p['scheme'] ?? 'http');
+    $host   = strtolower($p['host']);
+    $port   = isset($p['port']) ? ':' . $p['port'] : '';
+    $path   = $p['path'] ?? '/';
+
+    // Resolve dot-segments.
+    $out = [];
+    foreach (explode('/', $path) as $seg) {
+        if ($seg === '..')      { array_pop($out); }
+        elseif ($seg === '.')   { continue; }
+        else                    { $out[] = $seg; }
+    }
+    $path = implode('/', $out);
+    if ($path === '' || $path[0] !== '/') $path = '/' . $path;
+
+    $query = isset($p['query']) && $p['query'] !== '' ? '?' . $p['query'] : '';
+    return $scheme . '://' . $host . $port . $path . $query;
+}
+
+/**
+ * Turn a possibly-relative href into an absolute, canonical http(s) URL.
+ * Returns null for things we should never test (mailto:, tel:, javascript:,
+ * data:, pure #fragments, empty values, non-http schemes).
+ */
+function normalizeUrl(string $href, string $base): ?string {
+    $href = trim($href);
+    if ($href === '') return null;
+
+    // Skip non-navigable / non-http schemes and pure fragments.
+    if (preg_match('#^(mailto:|tel:|sms:|javascript:|data:|file:|ftp:|callto:)#i', $href)) {
+        return null;
+    }
+
+    // Drop any fragment — it never affects what the server returns.
+    if (($h = strpos($href, '#')) !== false) {
+        $href = substr($href, 0, $h);
+        if ($href === '') return null;
+    }
+
+    // Already absolute http(s).
+    if (preg_match('#^https?://#i', $href)) {
+        return canonicalize($href);
+    }
+
+    $b = parse_url($base);
+    if (!$b || empty($b['scheme']) || empty($b['host'])) return null;
+    $scheme    = $b['scheme'];
+    $authority = $scheme . '://' . $b['host'] . (isset($b['port']) ? ':' . $b['port'] : '');
+
+    // Protocol-relative: //host/path
+    if (str_starts_with($href, '//')) {
+        return canonicalize($scheme . ':' . $href);
+    }
+    // Root-relative: /path
+    if ($href[0] === '/') {
+        return canonicalize($authority . $href);
+    }
+    // Schemes we don't recognise but that still contain a colon early on
+    // (e.g. "tel:" caught above) — guard against odd "foo:bar" values.
+    if (preg_match('#^[a-z][a-z0-9+.\-]*:#i', $href) && !preg_match('#^https?:#i', $href)) {
+        return null;
+    }
+    // Document-relative: resolve against the base directory.
+    $basePath = $b['path'] ?? '/';
+    $dir = preg_replace('#/[^/]*$#', '/', $basePath);
+    if ($dir === '' || $dir === null) $dir = '/';
+    return canonicalize($authority . $dir . $href);
+}
+
+/** True when $url is on the same registrable host as $startHost (www-insensitive). */
+function sameHost(string $url, string $startHost): bool {
+    $h = strtolower((string)parse_url($url, PHP_URL_HOST));
+    if ($h === '') return false;
+    $h = preg_replace('#^www\.#', '', $h);
+    $s = preg_replace('#^www\.#', '', strtolower($startHost));
+    return $h === $s;
+}
+
+/** Path + query of a URL, used for robots.txt matching. */
+function path_with_query(string $url): string {
+    $p = parse_url($url);
+    $path = $p['path'] ?? '/';
+    if ($path === '') $path = '/';
+    if (isset($p['query']) && $p['query'] !== '') $path .= '?' . $p['query'];
+    return $path;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  robots.txt
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Parse robots.txt into  agent => ['allow'=>[...], 'disallow'=>[...]]. */
+function parse_robots(string $txt): array {
+    $groups = [];
+    $current = [];          // agents the current rules apply to
+    $expectAgent = false;   // a rule line was seen → next User-agent starts a new group
+
+    foreach (preg_split('/\r?\n/', $txt) as $raw) {
+        $line = trim(preg_replace('/#.*/', '', $raw));
+        if ($line === '' || !str_contains($line, ':')) continue;
+        [$field, $value] = array_map('trim', explode(':', $line, 2));
+        $field = strtolower($field);
+
+        if ($field === 'user-agent') {
+            if ($expectAgent) { $current = []; $expectAgent = false; }
+            $ua = strtolower($value);
+            $current[] = $ua;
+            $groups[$ua] ??= ['allow' => [], 'disallow' => []];
+        } elseif ($field === 'allow' || $field === 'disallow') {
+            $expectAgent = true;
+            foreach ($current as $ua) {
+                $groups[$ua][$field][] = $value;
+            }
+        }
+    }
+    return $groups;
+}
+
+/** Does a robots rule (with * and $ wildcards) match this path? */
+function robots_match(string $path, string $rule): bool {
+    $pattern = preg_quote($rule, '#');
+    $pattern = str_replace('\*', '.*', $pattern);
+    if (str_ends_with($pattern, '\$')) {
+        $pattern = substr($pattern, 0, -2) . '$';
+    }
+    return (bool)preg_match('#^' . $pattern . '#', $path);
+}
+
+/** Longest-match Allow/Disallow evaluation for the '*' group. */
+function robots_allowed(string $path, array $group): bool {
+    if (!$group) return true;
+    $bestLen = -1; $bestAllow = true;
+    foreach (['disallow', 'allow'] as $type) {
+        foreach ($group[$type] as $rule) {
+            if ($rule === '') continue;        // empty Disallow = allow everything
+            if (robots_match($path, $rule)) {
+                $len = strlen($rule);
+                if ($len > $bestLen || ($len === $bestLen && $type === 'allow')) {
+                    $bestLen = $len;
+                    $bestAllow = ($type === 'allow');
+                }
+            }
+        }
+    }
+    return $bestLen < 0 ? true : $bestAllow;
+}
+
+/** Fetch and parse robots.txt for the start URL's host; returns the '*' group. */
+function load_robots(string $startUrl, array $args): array {
+    $p = parse_url($startUrl);
+    $base = $p['scheme'] . '://' . $p['host'] . (isset($p['port']) ? ':' . $p['port'] : '');
+    $resp = http_request($base . '/robots.txt', 'GET', $args);
+    if ($resp['errno'] !== 0 || $resp['code'] >= 400 || $resp['body'] === '') {
+        return [];   // no usable robots.txt → nothing disallowed
+    }
+    $groups = parse_robots($resp['body']);
+    return $groups['*'] ?? [];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  HTTP layer (cURL)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Shared cURL options for a single request. $method is 'GET' or 'HEAD'. */
+function curl_options(string $method, array $args): array {
+    $opts = [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS      => $args['max-redirs'],
+        CURLOPT_CONNECTTIMEOUT => $args['connect-timeout'],
+        CURLOPT_TIMEOUT        => $args['timeout'],
+        CURLOPT_USERAGENT      => $args['user-agent'],
+        CURLOPT_SSL_VERIFYPEER => $args['verify-tls'],
+        CURLOPT_SSL_VERIFYHOST => $args['verify-tls'] ? 2 : 0,
+        CURLOPT_ENCODING       => '',                // accept gzip/deflate
+        CURLOPT_AUTOREFERER    => true,
+        CURLOPT_NOBODY         => ($method === 'HEAD'),
+        CURLOPT_HTTPGET        => ($method === 'GET'),
+    ];
+    if ($method === 'HEAD') {
+        $opts[CURLOPT_CUSTOMREQUEST] = 'HEAD';
+    }
+    return $opts;
+}
+
+/** Normalise a finished cURL handle into our result shape. */
+function curl_result(\CurlHandle $ch, string $url, string $method, string|false|null $body): array {
+    $info  = curl_getinfo($ch);
+    $errno = curl_errno($ch);
+    return [
+        'body'      => ($body === false || $body === null) ? '' : $body,
+        'code'      => (int)($info['http_code'] ?? 0),
+        'final'     => $info['url'] ?? $url,
+        'ctype'     => (string)($info['content_type'] ?? ''),
+        'redirects' => (int)($info['redirect_count'] ?? 0),
+        'errno'     => $errno,
+        'error'     => $errno ? curl_error($ch) : '',
+        'method'    => $method,
+    ];
+}
+
+/**
+ * Single cURL request. $method is 'GET' or 'HEAD'. Always follows redirects
+ * and reports the final effective URL + status. Never throws: connection
+ * problems come back as code 0 with a non-zero errno. Used for one-off
+ * fetches such as robots.txt; bulk work goes through http_multi().
+ */
+function http_request(string $url, string $method, array $args): array {
+    $ch = curl_init($url);
+    curl_setopt_array($ch, curl_options($method, $args));
+    $body = curl_exec($ch);
+    $res  = curl_result($ch, $url, $method, $body);
+    curl_close($ch);
+    return $res;
+}
+
+/**
+ * Run many cURL requests with at most $concurrency in flight at once, using
+ * the curl_multi API. $jobs is a list of ['key'=>mixed, 'url'=>string,
+ * 'method'=>'GET'|'HEAD']. Returns  key => result  (same shape as
+ * http_request()). The window is kept full: a new request starts as soon as
+ * any in-flight one finishes.
+ */
+function http_multi(array $jobs, array $args, int $concurrency): array {
+    $results = [];
+    $jobs    = array_values($jobs);
+    $total   = count($jobs);
+    if ($total === 0) return $results;
+
+    $concurrency = max(1, min($concurrency, $total));
+    $mh      = curl_multi_init();
+    $handles = [];   // (int)handle => job
+    $next    = 0;
+
+    // Launch the next queued job, if any, and register its handle.
+    $launch = function () use (&$next, &$handles, $jobs, $total, $mh, $args) {
+        if ($next >= $total) return;
+        $job = $jobs[$next++];
+        $ch  = curl_init($job['url']);
+        curl_setopt_array($ch, curl_options($job['method'], $args));
+        curl_multi_add_handle($mh, $ch);
+        $handles[(int)$ch] = $job;
+    };
+
+    for ($i = 0; $i < $concurrency; $i++) $launch();
+
+    do {
+        do {
+            $mrc = curl_multi_exec($mh, $running);
+        } while ($mrc === CURLM_CALL_MULTI_PERFORM);
+
+        // Block until there is activity (or a short timeout) to avoid busy-looping.
+        if ($running && curl_multi_select($mh, 1.0) === -1) {
+            usleep(50_000);
+        }
+
+        while ($done = curl_multi_info_read($mh)) {
+            if ($done['msg'] !== CURLMSG_DONE) continue;
+            $ch  = $done['handle'];
+            $id  = (int)$ch;
+            $job = $handles[$id];
+            $results[$job['key']] = curl_result($ch, $job['url'], $job['method'], curl_multi_getcontent($ch));
+            curl_multi_remove_handle($mh, $ch);
+            curl_close($ch);
+            unset($handles[$id]);
+            $launch();   // keep the window full
+        }
+    } while ($handles);
+
+    curl_multi_close($mh);
+    return $results;
+}
+
+/**
+ * Test a batch of links in parallel. Mirrors the single-link policy: try a
+ * cheap HEAD for every URL first, then re-test with GET only those the server
+ * rejected for HEAD (405/501/etc.), returned nothing for, or failed to reach.
+ * Returns  url => result  with a 'method' field recording which one was used.
+ */
+function checkLinks(array $urls, array $args): array {
+    $concurrency = $args['concurrency'];
+
+    // Wave 1 — HEAD everything.
+    $headJobs = [];
+    foreach ($urls as $u) $headJobs[] = ['key' => $u, 'url' => $u, 'method' => 'HEAD'];
+    $head = http_multi($headJobs, $args, $concurrency);
+
+    // Wave 2 — GET only the links that need a fallback.
+    $getJobs = [];
+    foreach ($urls as $u) {
+        $res = $head[$u];
+        $needGet = $res['errno'] !== 0
+            || $res['code'] === 0
+            || in_array($res['code'], [400, 403, 405, 406, 501], true);
+        if ($needGet) $getJobs[] = ['key' => $u, 'url' => $u, 'method' => 'GET'];
+    }
+    $get = $getJobs ? http_multi($getJobs, $args, $concurrency) : [];
+
+    // Merge: prefer the GET result when it reached the server.
+    $out = [];
+    foreach ($urls as $u) {
+        $res = $head[$u];
+        if (isset($get[$u]) && ($get[$u]['code'] > 0 || $res['code'] === 0)) {
+            $out[$u] = $get[$u];   // already carries method = 'GET'
+        } else {
+            $out[$u] = $res;       // already carries method = 'HEAD'
+        }
+    }
+    return $out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Link extraction (DOM)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Pull every link out of an HTML document and normalise it to an absolute URL.
+ * Honours a <base href> if present. Returns a list of
+ *   ['url' => absolute, 'type' => 'a'|'img'|'link'|'script', 'raw' => original]
+ */
+function extractLinks(string $html, string $pageUrl, bool $checkAssets): array {
+    if (trim($html) === '') return [];
+
+    libxml_use_internal_errors(true);             // swallow malformed-HTML noise
+    $doc = new DOMDocument();
+    $doc->loadHTML($html, LIBXML_NOWARNING | LIBXML_NOERROR);
+    libxml_clear_errors();
+
+    $xp = new DOMXPath($doc);
+
+    // A <base href> overrides the page URL for resolving relative links.
+    $base = $pageUrl;
+    $baseNode = $xp->query('//base[@href]')->item(0);
+    if ($baseNode instanceof DOMElement) {
+        $bh = trim($baseNode->getAttribute('href'));
+        if ($bh !== '') {
+            $resolved = normalizeUrl($bh, $pageUrl);
+            if ($resolved) $base = $resolved;
+        }
+    }
+
+    // attribute => link type
+    $targets = ['a' => ['href', 'a']];
+    if ($checkAssets) {
+        $targets['img']    = ['src', 'img'];
+        $targets['link']   = ['href', 'link'];
+        $targets['script'] = ['src', 'script'];
+    }
+
+    $found = [];
+    $seen  = [];
+    foreach ($targets as $tag => [$attr, $type]) {
+        foreach ($xp->query("//{$tag}[@{$attr}]") as $node) {
+            if (!$node instanceof DOMElement) continue;
+            $raw = $node->getAttribute($attr);
+            $abs = normalizeUrl($raw, $base);
+            if ($abs === null) continue;
+            $key = $type . '|' . $abs;
+            if (isset($seen[$key])) continue;       // de-dupe within a page
+            $seen[$key] = true;
+            $found[] = ['url' => $abs, 'type' => $type, 'raw' => trim($raw)];
+        }
+    }
+    return $found;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Classification
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Map a status code (+ errno) to a class key and human label. */
+function classify(int $code, int $errno): array {
+    if ($errno !== 0 || $code === 0)        return ['conn',     'Connection error'];
+    if ($code >= 200 && $code < 300)        return ['ok',       'OK'];
+    if ($code >= 300 && $code < 400)        return ['redirect', 'Redirect'];
+    if ($code >= 400 && $code < 500)        return ['client',   'Client error'];
+    if ($code >= 500)                       return ['server',   'Server error'];
+    return ['conn', 'Unknown'];
+}
+
+/** Is this classification a broken link? */
+function is_broken(string $class): bool {
+    return in_array($class, ['client', 'server', 'conn'], true);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Crawler  (BFS — no deep recursion)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function polite_delay(array $args): void {
+    if ($args['delay'] > 0) usleep($args['delay'] * 1000);
+}
+
+/**
+ * Breadth-first crawl, one depth level at a time. Each level fetches all of
+ * its pages in parallel, then tests every newly-discovered link in parallel,
+ * so the slow part (network round-trips) is overlapped up to --concurrency.
+ *
+ * In 'site' mode it follows internal <a> links to discover pages (up to
+ * max-pages / max-depth) while testing ALL links it finds. In 'page' mode it
+ * tests only the links on the start page.
+ *
+ * Returns a structure consumed by the report/CSV/summary builders.
+ */
+function crawl(array $args): array {
+    $start     = canonicalize($args['url']);
+    $startHost = (string)parse_url($start, PHP_URL_HOST);
+
+    $robots = $args['respect-robots'] ? load_robots($start, $args) : [];
+    if ($args['respect-robots']) {
+        echo $robots ? "🤖 robots.txt loaded — disallowed paths will be skipped.\n"
+                     : "🤖 No robots.txt restrictions found.\n";
+    }
+
+    $level   = [$start];           // page URLs to fetch at the current depth
+    $queued  = [$start => true];   // every URL ever enqueued (avoid dupes)
+    $visited = [];                 // pages actually fetched
+    $tested  = [];                 // url => result row (each link tested once)
+    $pageErrors = [];              // start/internal pages that failed to load
+    $pagesFetched = 0;
+    $depth = 0;
+
+    echo "\n🔗 Crawling {$start}  (mode: {$args['mode']}, max-pages: {$args['max-pages']}, "
+       . "depth: {$args['max-depth']}, concurrency: {$args['concurrency']})\n";
+
+    while ($level && $pagesFetched < $args['max-pages']) {
+        // Decide which pages in this level to actually fetch (skip visited /
+        // robots-disallowed, and stop at the max-pages cap).
+        $fetchJobs = [];
+        foreach ($level as $pageUrl) {
+            if (isset($visited[$pageUrl])) continue;
+            if ($args['respect-robots'] && !robots_allowed(path_with_query($pageUrl), $robots)) {
+                echo "  ⤫ robots disallow — skipping: {$pageUrl}\n";
+                continue;
+            }
+            if ($pagesFetched + count($fetchJobs) >= $args['max-pages']) {
+                echo "⚠  Reached max-pages cap ({$args['max-pages']}). Stopping crawl.\n";
+                break;
+            }
+            $visited[$pageUrl] = true;
+            $fetchJobs[] = ['key' => $pageUrl, 'url' => $pageUrl, 'method' => 'GET'];
+        }
+        if (!$fetchJobs) break;
+
+        echo "\n── depth {$depth} — fetching " . count($fetchJobs) . " page(s) in parallel\n";
+        polite_delay($args);
+        $pageResps = http_multi($fetchJobs, $args, $args['concurrency']);
+        $pagesFetched += count($pageResps);
+
+        // Extract links from every fetched page; collect the links not yet
+        // tested, and queue internal <a> targets for the next depth level.
+        $nextLevel = [];
+        $newLinks  = [];   // url => ['type'=>, 'source'=>]  (first sighting wins)
+        foreach ($pageResps as $pageUrl => $resp) {
+            if ($resp['errno'] !== 0 || $resp['code'] === 0 || $resp['code'] >= 400) {
+                $label = $resp['code'] > 0 ? "HTTP {$resp['code']}" : ('connection error: ' . $resp['error']);
+                $pageErrors[$pageUrl] = $label;
+                echo "  ⚠ could not load page ({$label}) — {$pageUrl}\n";
+                continue;
+            }
+            if (stripos($resp['ctype'], 'html') === false) {
+                echo "  · non-HTML page ({$resp['ctype']}) — not parsed — {$pageUrl}\n";
+                continue;
+            }
+
+            $links = extractLinks($resp['body'], $resp['final'] ?: $pageUrl, $args['check-assets']);
+            echo "  • {$pageUrl} — " . count($links) . " link(s)\n";
+
+            foreach ($links as $lnk) {
+                $u = $lnk['url'];
+                if (!isset($tested[$u]) && !isset($newLinks[$u])) {
+                    $newLinks[$u] = ['type' => $lnk['type'], 'source' => $pageUrl];
+                }
+                // In site mode, queue internal <a> targets for the next level.
+                if ($args['mode'] === 'site'
+                    && $lnk['type'] === 'a'
+                    && sameHost($u, $startHost)
+                    && !isset($queued[$u])
+                    && ($depth + 1) <= $args['max-depth']) {
+                    $queued[$u] = true;
+                    $nextLevel[] = $u;
+                }
+            }
+        }
+
+        // Test all newly-discovered links for this level in parallel.
+        if ($newLinks) {
+            echo "  ↻ testing " . count($newLinks) . " new link(s) in parallel…\n";
+            polite_delay($args);
+            $checked = checkLinks(array_keys($newLinks), $args);
+            $broken = 0;
+            foreach ($newLinks as $u => $meta) {
+                $chk = $checked[$u];
+                [$cls, $label] = classify($chk['code'], $chk['errno']);
+                if (is_broken($cls)) $broken++;
+                $tested[$u] = [
+                    'url'       => $u,
+                    'code'      => $chk['code'],
+                    'class'     => $cls,
+                    'label'     => $label,
+                    'final'     => $chk['final'],
+                    'method'    => $chk['method'],
+                    'redirects' => $chk['redirects'],
+                    'type'      => $meta['type'],
+                    'source'    => $meta['source'],
+                    'error'     => $chk['error'],
+                    'internal'  => sameHost($u, $startHost),
+                ];
+            }
+            echo "    done — {$broken} broken in this batch\n";
+        }
+
+        $level = $nextLevel;
+        $depth++;
+    }
+
+    return [
+        'results'      => $tested,
+        'pageErrors'   => $pageErrors,
+        'pagesFetched' => $pagesFetched,
+        'startHost'    => $startHost,
+        'start'        => $start,
+    ];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Aggregation
+// ─────────────────────────────────────────────────────────────────────────────
+
+function aggregate(array $crawl): array {
+    $counts = ['ok' => 0, 'redirect' => 0, 'client' => 0, 'server' => 0, 'conn' => 0];
+    $internal = 0; $external = 0; $broken = 0;
+    $byCode = [];
+
+    foreach ($crawl['results'] as $r) {
+        $counts[$r['class']] = ($counts[$r['class']] ?? 0) + 1;
+        if ($r['internal']) $internal++; else $external++;
+        if (is_broken($r['class'])) $broken++;
+        $codeKey = $r['code'] > 0 ? (string)$r['code'] : 'ERR';
+        $byCode[$codeKey] = ($byCode[$codeKey] ?? 0) + 1;
+    }
+    krsort($byCode, SORT_STRING);
+
+    return [
+        'counts'   => $counts,
+        'internal' => $internal,
+        'external' => $external,
+        'broken'   => $broken,
+        'totalLinks' => count($crawl['results']),
+        'byCode'   => $byCode,
+    ];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  HTML report
+// ─────────────────────────────────────────────────────────────────────────────
+
+function class_color(string $class): string {
+    switch ($class) {
+        case 'ok':       return '#22c55e';
+        case 'redirect': return '#3b82f6';
+        case 'client':   return '#f59e0b';
+        case 'server':   return '#ef4444';
+        case 'conn':     return '#a855f7';
+        default:         return '#94a3b8';
+    }
+}
+
+function status_badge(array $r): string {
+    $c = class_color($r['class']);
+    $code = $r['code'] > 0 ? (string)$r['code'] : 'ERR';
+    return "<span class=\"badge\" style=\"background:$c\">$code</span>";
+}
+
+function short_url(string $url): string {
+    return htmlspecialchars(preg_replace('#^https?://#', '', $url));
+}
+
+function summary_cards(array $agg): string {
+    $c = $agg['counts'];
+    $cards = [
+        ['OK (2xx)',         $c['ok'],       class_color('ok')],
+        ['Redirect (3xx)',   $c['redirect'], class_color('redirect')],
+        ['Client (4xx)',     $c['client'],   class_color('client')],
+        ['Server (5xx)',     $c['server'],   class_color('server')],
+        ['Connection error', $c['conn'],     class_color('conn')],
+    ];
+    $html = '';
+    foreach ($cards as [$label, $n, $color]) {
+        $html .= <<<CARD
+
+      <div class="card">
+        <div class="card-label">$label</div>
+        <div class="card-score" style="color:$color">$n</div>
+        <div class="card-sub">links</div>
+      </div>
+CARD;
+    }
+    $broken = $agg['broken'];
+    $brokenColor = $broken === 0 ? '#22c55e' : '#f87171';
+    $total = $agg['totalLinks'];
+    return <<<HTML
+<div class="section-title">🔗 Links by Status</div>
+<div class="cards">$html</div>
+<div class="stats">
+  <span><strong style="color:$brokenColor">$broken</strong> / $total broken links</span>
+  <span><strong>{$agg['internal']}</strong> internal</span>
+  <span><strong>{$agg['external']}</strong> external</span>
+</div>
+HTML;
+}
+
+/** The headline section: only broken links (4xx / 5xx / connection). */
+function broken_table(array $crawl): string {
+    $rows = '';
+    $i = 0;
+    foreach ($crawl['results'] as $r) {
+        if (!is_broken($r['class'])) continue;
+        $i++;
+        $color = class_color($r['class']);
+        $extra = $r['error'] !== '' ? htmlspecialchars(mb_substr($r['error'], 0, 120))
+                                    : ($r['final'] !== $r['url'] ? 'final: ' . short_url($r['final']) : '');
+        $rows .= "<tr>"
+               . "<td class=\"num\">$i</td>"
+               . "<td>" . status_badge($r) . "</td>"
+               . "<td><span style=\"color:$color;font-weight:600\">{$r['label']}</span></td>"
+               . "<td class=\"url-cell\"><a href=\"" . htmlspecialchars($r['url']) . "\" target=\"_blank\" rel=\"noopener\">" . short_url($r['url']) . "</a></td>"
+               . "<td class=\"ttype\">{$r['type']}</td>"
+               . "<td class=\"url-cell\"><a href=\"" . htmlspecialchars($r['source']) . "\" target=\"_blank\" rel=\"noopener\">" . short_url($r['source']) . "</a></td>"
+               . "<td class=\"note\">" . $extra . "</td>"
+               . "</tr>";
+    }
+    if ($rows === '') {
+        return '<div class="section-title">🚦 Broken Links</div>'
+             . '<p style="color:#22c55e;font-size:0.9rem">No broken links found. Every tested link returned a 2xx or a successful redirect.</p>';
+    }
+    return <<<HTML
+
+<div class="section-title">🚦 Broken Links</div>
+<div class="table-wrap" style="margin-top:10px">
+  <table>
+    <thead><tr><th>#</th><th>Status</th><th style="text-align:left">Class</th>
+      <th style="text-align:left">Broken link</th><th>Type</th>
+      <th style="text-align:left">Found on page</th><th style="text-align:left">Note</th></tr></thead>
+    <tbody>$rows</tbody>
+  </table>
+</div>
+HTML;
+}
+
+/** Status-code breakdown table. */
+function code_breakdown(array $agg): string {
+    if (!$agg['byCode']) return '';
+    $rows = '';
+    foreach ($agg['byCode'] as $code => $n) {
+        $isErr = $code === 'ERR';
+        $num = $isErr ? 0 : (int)$code;
+        [$cls] = $isErr ? ['conn'] : classify($num, 0);
+        $color = class_color($cls);
+        $rows .= "<tr><td><span class=\"badge\" style=\"background:$color\">$code</span></td>"
+               . "<td style=\"text-align:left;color:$color;font-weight:600\">" . ($isErr ? 'Connection error' : classify($num,0)[1]) . "</td>"
+               . "<td>$n</td></tr>";
+    }
+    return <<<HTML
+
+<div class="section-title">📊 By Status Code</div>
+<div class="table-wrap" style="margin-top:10px;max-width:420px">
+  <table>
+    <thead><tr><th>Code</th><th style="text-align:left">Meaning</th><th>Links</th></tr></thead>
+    <tbody>$rows</tbody>
+  </table>
+</div>
+HTML;
+}
+
+/** Full results table with client-side filter buttons. */
+function full_table(array $crawl): string {
+    $rows = '';
+    $i = 0;
+    foreach ($crawl['results'] as $r) {
+        $i++;
+        $color = class_color($r['class']);
+        $redir = $r['redirects'] > 0 ? " <span class=\"mini\">↩{$r['redirects']}</span>" : '';
+        $note  = $r['error'] !== '' ? htmlspecialchars(mb_substr($r['error'], 0, 100))
+                                    : ($r['final'] !== $r['url'] ? '→ ' . short_url($r['final']) : '');
+        $scope = $r['internal'] ? 'int' : 'ext';
+        $rows .= "<tr data-class=\"{$r['class']}\" data-broken=\"" . (is_broken($r['class']) ? '1' : '0') . "\">"
+               . "<td class=\"num\">$i</td>"
+               . "<td>" . status_badge($r) . "</td>"
+               . "<td><span style=\"color:$color;font-weight:600\">{$r['label']}</span>$redir</td>"
+               . "<td class=\"url-cell\"><a href=\"" . htmlspecialchars($r['url']) . "\" target=\"_blank\" rel=\"noopener\">" . short_url($r['url']) . "</a></td>"
+               . "<td class=\"ttype\">{$r['type']}</td>"
+               . "<td class=\"scope\">$scope</td>"
+               . "<td class=\"url-cell\"><a href=\"" . htmlspecialchars($r['source']) . "\" target=\"_blank\" rel=\"noopener\">" . short_url($r['source']) . "</a></td>"
+               . "<td class=\"note\">$note</td>"
+               . "</tr>";
+    }
+    return <<<HTML
+
+<div class="section-title">📋 All Tested Links</div>
+<div class="filters">
+  <button class="fbtn active" data-filter="all">All</button>
+  <button class="fbtn" data-filter="broken">Broken only</button>
+  <button class="fbtn" data-filter="ok">OK</button>
+  <button class="fbtn" data-filter="redirect">Redirect</button>
+  <button class="fbtn" data-filter="client">4xx</button>
+  <button class="fbtn" data-filter="server">5xx</button>
+  <button class="fbtn" data-filter="conn">Connection</button>
+</div>
+<div class="table-wrap">
+  <table id="all-links">
+    <thead><tr><th>#</th><th>Status</th><th style="text-align:left">Class</th>
+      <th style="text-align:left">Link</th><th>Type</th><th>Scope</th>
+      <th style="text-align:left">Found on page</th><th style="text-align:left">Note</th></tr></thead>
+    <tbody>$rows</tbody>
+  </table>
+</div>
+HTML;
+}
+
+/** Pages that themselves failed to load during the crawl. */
+function page_errors_table(array $crawl): string {
+    if (!$crawl['pageErrors']) return '';
+    $rows = '';
+    foreach ($crawl['pageErrors'] as $url => $label) {
+        $rows .= "<tr><td class=\"url-cell\"><a href=\"" . htmlspecialchars($url) . "\" target=\"_blank\" rel=\"noopener\">" . short_url($url) . "</a></td>"
+               . "<td style=\"text-align:left;color:#fca5a5\">" . htmlspecialchars($label) . "</td></tr>";
+    }
+    return <<<HTML
+
+<div class="section-title">⚠ Pages That Failed To Load</div>
+<div class="table-wrap" style="margin-top:10px">
+  <table>
+    <thead><tr><th style="text-align:left">Page URL</th><th style="text-align:left">Problem</th></tr></thead>
+    <tbody>$rows</tbody>
+  </table>
+</div>
+HTML;
+}
+
+function build_html(array $crawl, array $agg, array $args, string $generatedAt): string {
+    $cards   = summary_cards($agg);
+    $broken  = broken_table($crawl);
+    $codes   = code_breakdown($agg);
+    $full    = full_table($crawl);
+    $perrs   = page_errors_table($crawl);
+    $startEsc = htmlspecialchars($args['url']);
+    $modeEsc  = $args['mode'] === 'site' ? 'Whole site' : 'Single page';
+    $assetsEsc = $args['check-assets'] ? 'a, img, link, script' : 'a only';
+    $robotsEsc = $args['respect-robots'] ? 'honoured' : 'ignored';
+    $concEsc   = (int)$args['concurrency'];
+    $pages = $crawl['pagesFetched'];
+    $total = $agg['totalLinks'];
+
+    return <<<HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Broken Link Report — $generatedAt</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body  { font-family: system-ui, -apple-system, sans-serif;
+          background: #0f172a; color: #e2e8f0; margin: 0; padding: 24px 28px; }
+  h1    { font-size: 1.6rem; margin-bottom: 4px; color: #f8fafc; }
+  .meta { font-size: 0.8rem; color: #64748b; margin-bottom: 22px; line-height: 1.6; }
+  .section-title { font-size: 0.8rem; font-weight: 700; color: #64748b;
+                   text-transform: uppercase; letter-spacing: .1em; margin: 32px 0 10px; }
+  .cards { display: flex; flex-wrap: wrap; gap: 12px; }
+  .card  { background: #1e293b; border-radius: 10px; padding: 16px 22px; min-width: 148px; flex: 1; }
+  .card-label { font-size: 0.72rem; color: #94a3b8; text-transform: uppercase; letter-spacing: .06em; }
+  .card-score { font-size: 2.4rem; font-weight: 700; line-height: 1.1; margin: 4px 0; }
+  .card-sub   { font-size: 0.7rem; color: #64748b; }
+  .stats { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 12px;
+           font-size: 0.85rem; color: #94a3b8; }
+  .table-wrap { overflow-x: auto; border-radius: 10px; background: #1e293b; margin-top: 4px; }
+  table  { width: 100%; border-collapse: collapse; font-size: 0.77rem; }
+  th, td { padding: 8px 10px; text-align: center; border-bottom: 1px solid #334155; }
+  th     { background: #0f172a; color: #94a3b8; font-weight: 600;
+           text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
+  td.url-cell { text-align: left; max-width: 360px; overflow: hidden;
+                text-overflow: ellipsis; white-space: nowrap; }
+  td.url-cell a { color: #93c5fd; text-decoration: none; }
+  td.url-cell a:hover { text-decoration: underline; }
+  td.num   { color: #475569; width: 32px; }
+  td.ttype { color: #94a3b8; font-family: ui-monospace, monospace; font-size: 0.7rem; }
+  td.scope { color: #94a3b8; font-size: 0.7rem; }
+  td.note  { text-align: left; color: #64748b; font-size: 0.7rem;
+             max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  tr:hover td { background: #263045; }
+  .badge { display: inline-block; min-width: 34px; padding: 2px 8px; border-radius: 12px;
+           color: #fff; font-weight: 700; font-size: 0.72rem; }
+  .mini  { display: inline-block; padding: 0 6px; border-radius: 10px; background: #334155;
+           color: #cbd5e1; font-size: 0.66rem; margin-left: 4px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+  .fbtn  { background: #1e293b; color: #94a3b8; border: 1px solid #334155;
+           border-radius: 8px; padding: 5px 12px; font-size: 0.74rem; cursor: pointer; }
+  .fbtn:hover  { background: #263045; }
+  .fbtn.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .legend { margin-top: 22px; font-size: 0.72rem; color: #64748b; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+</style>
+</head>
+<body>
+<h1>🔗 Broken Link Bulk Report</h1>
+<div class="meta">
+  Start URL: <strong>$startEsc</strong> &nbsp;|&nbsp;
+  Mode: <strong>$modeEsc</strong> &nbsp;|&nbsp;
+  Pages crawled: <strong>$pages</strong> &nbsp;|&nbsp;
+  Links tested: <strong>$total</strong><br>
+  Checked elements: <strong>$assetsEsc</strong> &nbsp;|&nbsp;
+  robots.txt: <strong>$robotsEsc</strong> &nbsp;|&nbsp;
+  Concurrency: <strong>$concEsc</strong> &nbsp;|&nbsp;
+  Generated: <strong>$generatedAt</strong>
+</div>
+
+$cards
+$broken
+$perrs
+$codes
+$full
+
+<div class="legend">
+  <span class="dot" style="background:#22c55e"></span> OK &nbsp;
+  <span class="dot" style="background:#3b82f6"></span> Redirect &nbsp;
+  <span class="dot" style="background:#f59e0b"></span> Client error (4xx) &nbsp;
+  <span class="dot" style="background:#ef4444"></span> Server error (5xx) &nbsp;
+  <span class="dot" style="background:#a855f7"></span> Connection error
+</div>
+
+<script>
+  // Client-side filtering of the "All Tested Links" table.
+  const rows = Array.from(document.querySelectorAll('#all-links tbody tr'));
+  document.querySelectorAll('.fbtn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.fbtn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const f = btn.dataset.filter;
+      rows.forEach(tr => {
+        let show = true;
+        if (f === 'broken')      show = tr.dataset.broken === '1';
+        else if (f !== 'all')    show = tr.dataset.class === f;
+        tr.style.display = show ? '' : 'none';
+      });
+    });
+  });
+</script>
+</body>
+</html>
+HTML;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  CSV export
+// ─────────────────────────────────────────────────────────────────────────────
+
+function build_csv(array $crawl): string {
+    $fields = ['link_url', 'status_code', 'classification', 'label', 'final_url',
+               'method', 'redirects', 'link_type', 'scope', 'source_page', 'error'];
+    $fh = fopen('php://temp', 'r+');
+    fputcsv($fh, $fields);
+    foreach ($crawl['results'] as $r) {
+        fputcsv($fh, [
+            $r['url'],
+            $r['code'] > 0 ? $r['code'] : '0',
+            $r['class'],
+            $r['label'],
+            $r['final'],
+            $r['method'],
+            $r['redirects'],
+            $r['type'],
+            $r['internal'] ? 'internal' : 'external',
+            $r['source'],
+            $r['error'],
+        ]);
+    }
+    rewind($fh);
+    $csv = stream_get_contents($fh);
+    fclose($fh);
+    return $csv;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Console summary
+// ─────────────────────────────────────────────────────────────────────────────
+
+function print_summary(array $crawl, array $agg): void {
+    $c = $agg['counts'];
+    echo "\n─── Broken Link Summary ─────────────────────────────────\n";
+    printf("  Pages crawled : %d\n", $crawl['pagesFetched']);
+    printf("  Links tested  : %d  (%d internal, %d external)\n",
+        $agg['totalLinks'], $agg['internal'], $agg['external']);
+    printf("  Results       : ✓ %d OK   → %d redirect   ✗ %d 4xx   ✗ %d 5xx   ⚠ %d conn\n",
+        $c['ok'], $c['redirect'], $c['client'], $c['server'], $c['conn']);
+    printf("  Broken total  : %d\n", $agg['broken']);
+
+    if ($agg['broken'] > 0) {
+        echo "\n  Broken links:\n";
+        $shown = 0;
+        foreach ($crawl['results'] as $r) {
+            if (!is_broken($r['class'])) continue;
+            $code = $r['code'] > 0 ? $r['code'] : 'ERR';
+            printf("    [%s] %s  (on %s)\n", $code, $r['url'], $r['source']);
+            if (++$shown >= 25) { echo "    … and more (see report).\n"; break; }
+        }
+    }
+    echo "─────────────────────────────────────────────────────────\n\n";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Main
+// ─────────────────────────────────────────────────────────────────────────────
+
+function main(array $argv): void {
+    if (!extension_loaded('curl') || !extension_loaded('dom')) {
+        fwrite(STDERR, "❌  This script needs the PHP curl and dom extensions.\n");
+        exit(1);
+    }
+
+    $args = parse_args($argv);
+
+    // 1 — Crawl + test
+    $crawl = crawl($args);
+    if (!$crawl['results'] && !$crawl['pageErrors']) {
+        fwrite(STDERR, "❌  No links were found. Check that the start URL is reachable.\n");
+        exit(1);
+    }
+
+    // 2 — Aggregate
+    $agg = aggregate($crawl);
+
+    // 3 — HTML report
+    $generatedAt = date('Y-m-d H:i');
+    file_put_contents($args['output'], build_html($crawl, $agg, $args, $generatedAt));
+    echo "✅  HTML report → {$args['output']}\n";
+
+    // 4 — CSV export
+    file_put_contents($args['csv'], build_csv($crawl));
+    echo "✅  CSV export  → {$args['csv']}\n";
+
+    // 5 — Console summary
+    print_summary($crawl, $agg);
+}
+
+main($argv);

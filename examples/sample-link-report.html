@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Broken Link Report — 2026-06-22 14:54</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body  { font-family: system-ui, -apple-system, sans-serif;
+          background: #0f172a; color: #e2e8f0; margin: 0; padding: 24px 28px; }
+  h1    { font-size: 1.6rem; margin-bottom: 4px; color: #f8fafc; }
+  .meta { font-size: 0.8rem; color: #64748b; margin-bottom: 22px; line-height: 1.6; }
+  .section-title { font-size: 0.8rem; font-weight: 700; color: #64748b;
+                   text-transform: uppercase; letter-spacing: .1em; margin: 32px 0 10px; }
+  .cards { display: flex; flex-wrap: wrap; gap: 12px; }
+  .card  { background: #1e293b; border-radius: 10px; padding: 16px 22px; min-width: 148px; flex: 1; }
+  .card-label { font-size: 0.72rem; color: #94a3b8; text-transform: uppercase; letter-spacing: .06em; }
+  .card-score { font-size: 2.4rem; font-weight: 700; line-height: 1.1; margin: 4px 0; }
+  .card-sub   { font-size: 0.7rem; color: #64748b; }
+  .stats { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 12px;
+           font-size: 0.85rem; color: #94a3b8; }
+  .table-wrap { overflow-x: auto; border-radius: 10px; background: #1e293b; margin-top: 4px; }
+  table  { width: 100%; border-collapse: collapse; font-size: 0.77rem; }
+  th, td { padding: 8px 10px; text-align: center; border-bottom: 1px solid #334155; }
+  th     { background: #0f172a; color: #94a3b8; font-weight: 600;
+           text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
+  td.url-cell { text-align: left; max-width: 360px; overflow: hidden;
+                text-overflow: ellipsis; white-space: nowrap; }
+  td.url-cell a { color: #93c5fd; text-decoration: none; }
+  td.url-cell a:hover { text-decoration: underline; }
+  td.num   { color: #475569; width: 32px; }
+  td.ttype { color: #94a3b8; font-family: ui-monospace, monospace; font-size: 0.7rem; }
+  td.scope { color: #94a3b8; font-size: 0.7rem; }
+  td.note  { text-align: left; color: #64748b; font-size: 0.7rem;
+             max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  tr:hover td { background: #263045; }
+  .badge { display: inline-block; min-width: 34px; padding: 2px 8px; border-radius: 12px;
+           color: #fff; font-weight: 700; font-size: 0.72rem; }
+  .mini  { display: inline-block; padding: 0 6px; border-radius: 10px; background: #334155;
+           color: #cbd5e1; font-size: 0.66rem; margin-left: 4px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+  .fbtn  { background: #1e293b; color: #94a3b8; border: 1px solid #334155;
+           border-radius: 8px; padding: 5px 12px; font-size: 0.74rem; cursor: pointer; }
+  .fbtn:hover  { background: #263045; }
+  .fbtn.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .legend { margin-top: 22px; font-size: 0.72rem; color: #64748b; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+</style>
+</head>
+<body>
+<h1>🔗 Broken Link Bulk Report</h1>
+<div class="meta">
+  Start URL: <strong>https://example.com</strong> &nbsp;|&nbsp;
+  Mode: <strong>Whole site</strong> &nbsp;|&nbsp;
+  Pages crawled: <strong>4</strong> &nbsp;|&nbsp;
+  Links tested: <strong>14</strong><br>
+  Checked elements: <strong>a, img, link, script</strong> &nbsp;|&nbsp;
+  robots.txt: <strong>honoured</strong> &nbsp;|&nbsp;
+  Concurrency: <strong>10</strong> &nbsp;|&nbsp;
+  Generated: <strong>2026-06-22 14:54</strong>
+</div>
+
+<div class="section-title">🔗 Links by Status</div>
+<div class="cards">
+      <div class="card">
+        <div class="card-label">OK (2xx)</div>
+        <div class="card-score" style="color:#22c55e">7</div>
+        <div class="card-sub">links</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Redirect (3xx)</div>
+        <div class="card-score" style="color:#3b82f6">2</div>
+        <div class="card-sub">links</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Client (4xx)</div>
+        <div class="card-score" style="color:#f59e0b">3</div>
+        <div class="card-sub">links</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Server (5xx)</div>
+        <div class="card-score" style="color:#ef4444">1</div>
+        <div class="card-sub">links</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Connection error</div>
+        <div class="card-score" style="color:#a855f7">1</div>
+        <div class="card-sub">links</div>
+      </div></div>
+<div class="stats">
+  <span><strong style="color:#f87171">5</strong> / 14 broken links</span>
+  <span><strong>11</strong> internal</span>
+  <span><strong>3</strong> external</span>
+</div>
+
+<div class="section-title">🚦 Broken Links</div>
+<div class="table-wrap" style="margin-top:10px">
+  <table>
+    <thead><tr><th>#</th><th>Status</th><th style="text-align:left">Class</th>
+      <th style="text-align:left">Broken link</th><th>Type</th>
+      <th style="text-align:left">Found on page</th><th style="text-align:left">Note</th></tr></thead>
+    <tbody><tr><td class="num">1</td><td><span class="badge" style="background:#f59e0b">404</span></td><td><span style="color:#f59e0b;font-weight:600">Client error</span></td><td class="url-cell"><a href="https://example.com/team/jane" target="_blank" rel="noopener">example.com/team/jane</a></td><td class="ttype">a</td><td class="url-cell"><a href="https://example.com/about" target="_blank" rel="noopener">example.com/about</a></td><td class="note"></td></tr><tr><td class="num">2</td><td><span class="badge" style="background:#f59e0b">404</span></td><td><span style="color:#f59e0b;font-weight:600">Client error</span></td><td class="url-cell"><a href="https://example.com/img/banner-old.jpg" target="_blank" rel="noopener">example.com/img/banner-old.jpg</a></td><td class="ttype">img</td><td class="url-cell"><a href="https://example.com/" target="_blank" rel="noopener">example.com/</a></td><td class="note"></td></tr><tr><td class="num">3</td><td><span class="badge" style="background:#f59e0b">403</span></td><td><span style="color:#f59e0b;font-weight:600">Client error</span></td><td class="url-cell"><a href="https://example.net/partners" target="_blank" rel="noopener">example.net/partners</a></td><td class="ttype">a</td><td class="url-cell"><a href="https://example.com/contact" target="_blank" rel="noopener">example.com/contact</a></td><td class="note"></td></tr><tr><td class="num">4</td><td><span class="badge" style="background:#ef4444">503</span></td><td><span style="color:#ef4444;font-weight:600">Server error</span></td><td class="url-cell"><a href="https://example.com/api/status" target="_blank" rel="noopener">example.com/api/status</a></td><td class="ttype">a</td><td class="url-cell"><a href="https://example.com/" target="_blank" rel="noopener">example.com/</a></td><td class="note"></td></tr><tr><td class="num">5</td><td><span class="badge" style="background:#a855f7">ERR</span></td><td><span style="color:#a855f7;font-weight:600">Connection error</span></td><td class="url-cell"><a href="https://broken.invalid/resource" target="_blank" rel="noopener">broken.invalid/resource</a></td><td class="ttype">a</td><td class="url-cell"><a href="https://example.com/contact" target="_blank" rel="noopener">example.com/contact</a></td><td class="note">Could not resolve host: broken.invalid</td></tr></tbody>
+  </table>
+</div>
+
+<div class="section-title">⚠ Pages That Failed To Load</div>
+<div class="table-wrap" style="margin-top:10px">
+  <table>
+    <thead><tr><th style="text-align:left">Page URL</th><th style="text-align:left">Problem</th></tr></thead>
+    <tbody><tr><td class="url-cell"><a href="https://example.com/private/draft" target="_blank" rel="noopener">example.com/private/draft</a></td><td style="text-align:left;color:#fca5a5">HTTP 500</td></tr></tbody>
+  </table>
+</div>
+
+<div class="section-title">📊 By Status Code</div>
+<div class="table-wrap" style="margin-top:10px;max-width:420px">
+  <table>
+    <thead><tr><th>Code</th><th style="text-align:left">Meaning</th><th>Links</th></tr></thead>
+    <tbody><tr><td><span class="badge" style="background:#a855f7">ERR</span></td><td style="text-align:left;color:#a855f7;font-weight:600">Connection error</td><td>1</td></tr><tr><td><span class="badge" style="background:#ef4444">503</span></td><td style="text-align:left;color:#ef4444;font-weight:600">Server error</td><td>1</td></tr><tr><td><span class="badge" style="background:#f59e0b">404</span></td><td style="text-align:left;color:#f59e0b;font-weight:600">Client error</td><td>2</td></tr><tr><td><span class="badge" style="background:#f59e0b">403</span></td><td style="text-align:left;color:#f59e0b;font-weight:600">Client error</td><td>1</td></tr><tr><td><span class="badge" style="background:#3b82f6">302</span></td><td style="text-align:left;color:#3b82f6;font-weight:600">Redirect</td><td>1</td></tr><tr><td><span class="badge" style="background:#3b82f6">301</span></td><td style="text-align:left;color:#3b82f6;font-weight:600">Redirect</td><td>1</td></tr><tr><td><span class="badge" style="background:#22c55e">200</span></td><td style="text-align:left;color:#22c55e;font-weight:600">OK</td><td>7</td></tr></tbody>
+  </table>
+</div>
+
+<div class="section-title">📋 All Tested Links</div>
+<div class="filters">
+  <button class="fbtn active" data-filter="all">All</button>
+  <button class="fbtn" data-filter="broken">Broken only</button>
+  <button class="fbtn" data-filter="ok">OK</button>
+  <button class="fbtn" data-filter="redirect">Redirect</button>
+  <button class="fbtn" data-filter="client">4xx</button>
+  <button class="fbtn" data-filter="server">5xx</button>
+  <button class="fbtn" data-filter="conn">Connection</button>
+</div>
+<div class="table-wrap">
+  <table id="all-links">
+    <thead><tr><th>#</th><th>Status</th><th style="text-align:left">Class</th>
+      <th style="text-align:left">Link</th><th>Type</th><th>Scope</th>
+      <th style="text-align:left">Found on page</th><th style="text-align:left">Note</th></tr></thead>
+    <tbody><tr data-class="ok" data-broken="0"><td class="num">1</td><td><span class="badge" style="background:#22c55e">200</span></td><td><span style="color:#22c55e;font-weight:600">OK</span></td><td class="url-cell"><a href="https://example.com/" target="_blank" rel="noopener">example.com/</a></td><td class="ttype">a</td><td class="scope">int</td><td class="url-cell"><a href="https://example.com/" target="_blank" rel="noopener">example.com/</a></td><td class="note"></td></tr><tr data-class="ok" data-broken="0"><td class="num">2</td><td><span class="badge" style="background:#22c55e">200</span></td><td><span style="color:#22c55e;font-weight:600">OK</span></td><td class="url-cell"><a href="https://example.com/about" target="_blank" rel="noopener">example.com/about</a></td><td class="ttype">a</td><td class="scope">int</td><td class="url-cell"><a href="https://example.com/" target="_blank" rel="noopener">example.com/</a></td><td class="note"></td></tr><tr data-class="ok" data-broken="0"><td class="num">3</td><td><span class="badge" style="background:#22c55e">200</span></td><td><span style="color:#22c55e;font-weight:600">OK</span></td><td class="url-cell"><a href="https://example.com/contact" target="_blank" rel="noopener">example.com/contact</a></td><td class="ttype">a</td><td class="scope">int</td><td class="url-cell"><a href="https://example.com/" target="_blank" rel="noopener">example.com/</a></td><td class="note"></td></tr><tr data-class="ok" data-broken="0"><td class="num">4</td><td><span class="badge" style="background:#22c55e">200</span></td><td><span style="color:#22c55e;font-weight:600">OK</span></td><td class="url-cell"><a href="https://example.com/css/site.css" target="_blank" rel="noopener">example.com/css/site.css</a></td><td class="ttype">link</td><td class="scope">int</td><td class="url-cell"><a href="https://example.com/" target="_blank" rel="noopener">example.com/</a></td><td class="note"></td></tr><tr data-class="ok" data-broken="0"><td class="num">5</td><td><span class="badge" style="background:#22c55e">200</span></td><td><span style="color:#22c55e;font-weight:600">OK</span></td><td class="url-cell"><a href="https://example.com/js/app.js" target="_blank" rel="noopener">example.com/js/app.js</a></td><td class="ttype">script</td><td class="scope">int</td><td class="url-cell"><a href="https://example.com/" target="_blank" rel="noopener">example.com/</a></td><td class="note"></td></tr><tr data-class="ok" data-broken="0"><td class="num">6</td><td><span class="badge" style="background:#22c55e">200</span></td><td><span style="color:#22c55e;font-weight:600">OK</span></td><td class="url-cell"><a href="https://example.com/img/logo.png" target="_blank" rel="noopener">example.com/img/logo.png</a></td><td class="ttype">img</td><td class="scope">int</td><td class="url-cell"><a href="https://example.com/" target="_blank" rel="noopener">example.com/</a></td><td class="note"></td></tr><tr data-class="ok" data-broken="0"><td class="num">7</td><td><span class="badge" style="background:#22c55e">200</span></td><td><span style="color:#22c55e;font-weight:600">OK</span></td><td class="url-cell"><a href="https://example.org/" target="_blank" rel="noopener">example.org/</a></td><td class="ttype">a</td><td class="scope">ext</td><td class="url-cell"><a href="https://example.com/about" target="_blank" rel="noopener">example.com/about</a></td><td class="note"></td></tr><tr data-class="redirect" data-broken="0"><td class="num">8</td><td><span class="badge" style="background:#3b82f6">301</span></td><td><span style="color:#3b82f6;font-weight:600">Redirect</span> <span class="mini">↩1</span></td><td class="url-cell"><a href="http://example.com/blog" target="_blank" rel="noopener">example.com/blog</a></td><td class="ttype">a</td><td class="scope">int</td><td class="url-cell"><a href="https://example.com/" target="_blank" rel="noopener">example.com/</a></td><td class="note">→ example.com/blog</td></tr><tr data-class="redirect" data-broken="0"><td class="num">9</td><td><span class="badge" style="background:#3b82f6">302</span></td><td><span style="color:#3b82f6;font-weight:600">Redirect</span> <span class="mini">↩1</span></td><td class="url-cell"><a href="https://example.com/old-pricing" target="_blank" rel="noopener">example.com/old-pricing</a></td><td class="ttype">a</td><td class="scope">int</td><td class="url-cell"><a href="https://example.com/about" target="_blank" rel="noopener">example.com/about</a></td><td class="note">→ example.com/pricing</td></tr><tr data-class="client" data-broken="1"><td class="num">10</td><td><span class="badge" style="background:#f59e0b">404</span></td><td><span style="color:#f59e0b;font-weight:600">Client error</span></td><td class="url-cell"><a href="https://example.com/team/jane" target="_blank" rel="noopener">example.com/team/jane</a></td><td class="ttype">a</td><td class="scope">int</td><td class="url-cell"><a href="https://example.com/about" target="_blank" rel="noopener">example.com/about</a></td><td class="note"></td></tr><tr data-class="client" data-broken="1"><td class="num">11</td><td><span class="badge" style="background:#f59e0b">404</span></td><td><span style="color:#f59e0b;font-weight:600">Client error</span></td><td class="url-cell"><a href="https://example.com/img/banner-old.jpg" target="_blank" rel="noopener">example.com/img/banner-old.jpg</a></td><td class="ttype">img</td><td class="scope">int</td><td class="url-cell"><a href="https://example.com/" target="_blank" rel="noopener">example.com/</a></td><td class="note"></td></tr><tr data-class="client" data-broken="1"><td class="num">12</td><td><span class="badge" style="background:#f59e0b">403</span></td><td><span style="color:#f59e0b;font-weight:600">Client error</span></td><td class="url-cell"><a href="https://example.net/partners" target="_blank" rel="noopener">example.net/partners</a></td><td class="ttype">a</td><td class="scope">ext</td><td class="url-cell"><a href="https://example.com/contact" target="_blank" rel="noopener">example.com/contact</a></td><td class="note"></td></tr><tr data-class="server" data-broken="1"><td class="num">13</td><td><span class="badge" style="background:#ef4444">503</span></td><td><span style="color:#ef4444;font-weight:600">Server error</span></td><td class="url-cell"><a href="https://example.com/api/status" target="_blank" rel="noopener">example.com/api/status</a></td><td class="ttype">a</td><td class="scope">int</td><td class="url-cell"><a href="https://example.com/" target="_blank" rel="noopener">example.com/</a></td><td class="note"></td></tr><tr data-class="conn" data-broken="1"><td class="num">14</td><td><span class="badge" style="background:#a855f7">ERR</span></td><td><span style="color:#a855f7;font-weight:600">Connection error</span></td><td class="url-cell"><a href="https://broken.invalid/resource" target="_blank" rel="noopener">broken.invalid/resource</a></td><td class="ttype">a</td><td class="scope">ext</td><td class="url-cell"><a href="https://example.com/contact" target="_blank" rel="noopener">example.com/contact</a></td><td class="note">Could not resolve host: broken.invalid</td></tr></tbody>
+  </table>
+</div>
+
+<div class="legend">
+  <span class="dot" style="background:#22c55e"></span> OK &nbsp;
+  <span class="dot" style="background:#3b82f6"></span> Redirect &nbsp;
+  <span class="dot" style="background:#f59e0b"></span> Client error (4xx) &nbsp;
+  <span class="dot" style="background:#ef4444"></span> Server error (5xx) &nbsp;
+  <span class="dot" style="background:#a855f7"></span> Connection error
+</div>
+
+<script>
+  // Client-side filtering of the "All Tested Links" table.
+  const rows = Array.from(document.querySelectorAll('#all-links tbody tr'));
+  document.querySelectorAll('.fbtn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.fbtn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const f = btn.dataset.filter;
+      rows.forEach(tr => {
+        let show = true;
+        if (f === 'broken')      show = tr.dataset.broken === '1';
+        else if (f !== 'all')    show = tr.dataset.class === f;
+        tr.style.display = show ? '' : 'none';
+      });
+    });
+  });
+</script>
+</body>
+</html>
