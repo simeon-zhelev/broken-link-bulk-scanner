@@ -172,7 +172,9 @@ function canonicalize(string $url): string {
 /**
  * Turn a possibly-relative href into an absolute, canonical http(s) URL.
  * Returns null for things we should never test (mailto:, tel:, javascript:,
- * data:, pure #fragments, empty values, non-http schemes).
+ * data:, pure #fragments, empty values, non-http schemes). Placeholder
+ * anchors (<a href="#">) are caught earlier in extractLinks() and reported
+ * as their own class rather than being tested here.
  */
 function normalizeUrl(string $href, string $base): ?string {
     $href = trim($href);
@@ -217,6 +219,31 @@ function normalizeUrl(string $href, string $base): ?string {
     $dir = preg_replace('#/[^/]*$#', '/', $basePath);
     if ($dir === '' || $dir === null) $dir = '/';
     return canonicalize($authority . $dir . $href);
+}
+
+/**
+ * Decide whether an <a> href is a "placeholder" — a link with no real
+ * navigable target that the user almost certainly left unfinished. These are
+ * the values normalizeUrl() would silently drop, so they'd never appear in the
+ * report otherwise. Returns [reasonKey, humanLabel], or null when the href is a
+ * genuine link that should be fetched and HTTP-tested instead.
+ *
+ *   href=""                 → empty
+ *   href="   "              → whitespace only (trims to empty)
+ *   href="#"                → fragment to the top of the page, no target
+ *   href="javascript:..."   → JS pseudo-link that never navigates
+ *
+ * NOT placeholders (these resolve to something real and are tested normally):
+ *   href="#section"         → in-page anchor to an element id
+ *   href="test"             → relative URL → fetched (shows as broken if 404)
+ *   href="mailto:" / "tel:" → functional, just not HTTP
+ */
+function placeholder_reason(string $rawHref): ?array {
+    $h = trim($rawHref);
+    if ($h === '')                          return ['empty',      'Empty href (href="")'];
+    if ($h === '#')                         return ['fragment',   'Fragment only (href="#")'];
+    if (preg_match('#^javascript:#i', $h))  return ['javascript', 'JavaScript placeholder'];
+    return null;
 }
 
 /** True when $url is on the same registrable host as $startHost (www-insensitive). */
@@ -469,6 +496,9 @@ function checkLinks(array $urls, array $args): array {
  * Pull every link out of an HTML document and normalise it to an absolute URL.
  * Honours a <base href> if present. Returns a list of
  *   ['url' => absolute, 'type' => 'a'|'img'|'link'|'script', 'raw' => original]
+ * Empty/placeholder anchors (href="", "#", "javascript:…") come back as
+ *   ['url' => raw|'(empty href)', 'type' => 'a', 'raw' => …, 'placeholder' => true,
+ *    'reasonKey' => 'empty'|'fragment'|'javascript', 'reason' => label, 'text' => …]
  */
 function extractLinks(string $html, string $pageUrl, bool $checkAssets): array {
     if (trim($html) === '') return [];
@@ -504,13 +534,30 @@ function extractLinks(string $html, string $pageUrl, bool $checkAssets): array {
     foreach ($targets as $tag => [$attr, $type]) {
         foreach ($xp->query("//{$tag}[@{$attr}]") as $node) {
             if (!$node instanceof DOMElement) continue;
-            $raw = $node->getAttribute($attr);
+            $raw = trim($node->getAttribute($attr));
+
+            // Empty / placeholder anchors (href="", "#", "javascript:…") point
+            // nowhere — flag them as dead/unfinished links instead of silently
+            // dropping them. Real targets (#section, relative URLs) fall through
+            // to normalizeUrl below and are tested over HTTP as usual.
+            if ($type === 'a' && ($reason = placeholder_reason($raw)) !== null) {
+                $text = trim(preg_replace('/\s+/', ' ', $node->textContent ?? ''));
+                if (mb_strlen($text) > 80) $text = mb_substr($text, 0, 80) . '…';
+                $key = 'placeholder|' . $reason[0] . '|' . $text;
+                if (isset($seen[$key])) continue;   // de-dupe within a page
+                $seen[$key] = true;
+                $found[] = ['url' => $raw === '' ? '(empty href)' : $raw, 'type' => 'a',
+                            'raw' => $raw, 'placeholder' => true,
+                            'reasonKey' => $reason[0], 'reason' => $reason[1], 'text' => $text];
+                continue;
+            }
+
             $abs = normalizeUrl($raw, $base);
             if ($abs === null) continue;
             $key = $type . '|' . $abs;
             if (isset($seen[$key])) continue;       // de-dupe within a page
             $seen[$key] = true;
-            $found[] = ['url' => $abs, 'type' => $type, 'raw' => trim($raw)];
+            $found[] = ['url' => $abs, 'type' => $type, 'raw' => $raw];
         }
     }
     return $found;
@@ -619,6 +666,29 @@ function crawl(array $args): array {
             echo "  • {$pageUrl} — " . count($links) . " link(s)\n";
 
             foreach ($links as $lnk) {
+                // Empty/placeholder anchors point nowhere — record them
+                // directly (no HTTP test), keyed per page + reason + anchor
+                // text so distinct dead links on the same page are each shown.
+                if (!empty($lnk['placeholder'])) {
+                    $key = 'placeholder|' . $pageUrl . '|' . $lnk['reasonKey'] . '|' . $lnk['text'];
+                    if (!isset($tested[$key])) {
+                        $tested[$key] = [
+                            'url'       => $lnk['url'],
+                            'code'      => 0,
+                            'class'     => 'placeholder',
+                            'label'     => $lnk['reason'],
+                            'final'     => $lnk['url'],
+                            'method'    => '—',
+                            'redirects' => 0,
+                            'type'      => 'a',
+                            'source'    => $pageUrl,
+                            'error'     => $lnk['text'] !== '' ? 'text: "' . $lnk['text'] . '"' : '(no link text)',
+                            'internal'  => true,
+                        ];
+                    }
+                    continue;
+                }
+
                 $u = $lnk['url'];
                 if (!isset($tested[$u]) && !isset($newLinks[$u])) {
                     $newLinks[$u] = ['type' => $lnk['type'], 'source' => $pageUrl];
@@ -680,14 +750,17 @@ function crawl(array $args): array {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function aggregate(array $crawl): array {
-    $counts = ['ok' => 0, 'redirect' => 0, 'client' => 0, 'server' => 0, 'conn' => 0];
-    $internal = 0; $external = 0; $broken = 0;
+    $counts = ['ok' => 0, 'redirect' => 0, 'client' => 0, 'server' => 0, 'conn' => 0, 'placeholder' => 0];
+    $internal = 0; $external = 0; $broken = 0; $placeholders = 0;
     $byCode = [];
 
     foreach ($crawl['results'] as $r) {
         $counts[$r['class']] = ($counts[$r['class']] ?? 0) + 1;
         if ($r['internal']) $internal++; else $external++;
         if (is_broken($r['class'])) $broken++;
+        // Placeholder links have no HTTP status — keep them out of the
+        // status-code breakdown (their code 0 is not a connection error).
+        if ($r['class'] === 'placeholder') { $placeholders++; continue; }
         $codeKey = $r['code'] > 0 ? (string)$r['code'] : 'ERR';
         $byCode[$codeKey] = ($byCode[$codeKey] ?? 0) + 1;
     }
@@ -698,6 +771,7 @@ function aggregate(array $crawl): array {
         'internal' => $internal,
         'external' => $external,
         'broken'   => $broken,
+        'placeholders' => $placeholders,
         'totalLinks' => count($crawl['results']),
         'byCode'   => $byCode,
     ];
@@ -714,6 +788,7 @@ function class_color(string $class): string {
         case 'client':   return '#f59e0b';
         case 'server':   return '#ef4444';
         case 'conn':     return '#a855f7';
+        case 'placeholder': return '#2dd4bf';
         default:         return '#94a3b8';
     }
 }
@@ -736,6 +811,7 @@ function summary_cards(array $agg): string {
         ['Client (4xx)',     $c['client'],   class_color('client')],
         ['Server (5xx)',     $c['server'],   class_color('server')],
         ['Connection error', $c['conn'],     class_color('conn')],
+        ['Empty / placeholder', $c['placeholder'] ?? 0, class_color('placeholder')],
     ];
     $html = '';
     foreach ($cards as [$label, $n, $color]) {
@@ -800,6 +876,38 @@ function broken_table(array $crawl): string {
 HTML;
 }
 
+/** Empty / placeholder links: <a href=""> / "#" / "javascript:…" that go nowhere. */
+function placeholder_table(array $crawl): string {
+    $rows = '';
+    $i = 0;
+    foreach ($crawl['results'] as $r) {
+        if ($r['class'] !== 'placeholder') continue;
+        $i++;
+        $color = class_color('placeholder');
+        $href  = '<code>href="' . htmlspecialchars($r['url'] === '(empty href)' ? '' : $r['url']) . '"</code>';
+        $text  = $r['error'] !== '' ? htmlspecialchars($r['error']) : '—';
+        $rows .= "<tr>"
+               . "<td class=\"num\">$i</td>"
+               . "<td class=\"ttype\">$href</td>"
+               . "<td><span style=\"color:$color;font-weight:600\">" . htmlspecialchars($r['label']) . "</span></td>"
+               . "<td class=\"note\" style=\"max-width:320px\">$text</td>"
+               . "<td class=\"url-cell\"><a href=\"" . htmlspecialchars($r['source']) . "\" target=\"_blank\" rel=\"noopener\">" . short_url($r['source']) . "</a></td>"
+               . "</tr>";
+    }
+    if ($rows === '') return '';
+    return <<<HTML
+
+<div class="section-title">🔗 Empty / Placeholder Links</div>
+<div class="table-wrap" style="margin-top:10px">
+  <table>
+    <thead><tr><th>#</th><th style="text-align:left">Href</th><th style="text-align:left">Reason</th>
+      <th style="text-align:left">Link text</th><th style="text-align:left">Found on page</th></tr></thead>
+    <tbody>$rows</tbody>
+  </table>
+</div>
+HTML;
+}
+
 /** Status-code breakdown table. */
 function code_breakdown(array $agg): string {
     if (!$agg['byCode']) return '';
@@ -858,6 +966,7 @@ function full_table(array $crawl): string {
   <button class="fbtn" data-filter="client">4xx</button>
   <button class="fbtn" data-filter="server">5xx</button>
   <button class="fbtn" data-filter="conn">Connection</button>
+  <button class="fbtn" data-filter="placeholder">Empty / placeholder</button>
 </div>
 <div class="table-wrap">
   <table id="all-links">
@@ -893,6 +1002,7 @@ HTML;
 function build_html(array $crawl, array $agg, array $args, string $generatedAt): string {
     $cards   = summary_cards($agg);
     $broken  = broken_table($crawl);
+    $placeholders = placeholder_table($crawl);
     $codes   = code_breakdown($agg);
     $full    = full_table($crawl);
     $perrs   = page_errors_table($crawl);
@@ -950,6 +1060,8 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
            border-radius: 8px; padding: 5px 12px; font-size: 0.74rem; cursor: pointer; }
   .fbtn:hover  { background: #263045; }
   .fbtn.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  code   { font-family: ui-monospace, monospace; font-size: 0.72rem;
+           background: #0f172a; color: #cbd5e1; padding: 1px 6px; border-radius: 6px; }
   .legend { margin-top: 22px; font-size: 0.72rem; color: #64748b; }
   .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px; vertical-align:middle; }
 </style>
@@ -969,6 +1081,7 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
 
 $cards
 $broken
+$placeholders
 $perrs
 $codes
 $full
@@ -978,7 +1091,8 @@ $full
   <span class="dot" style="background:#3b82f6"></span> Redirect &nbsp;
   <span class="dot" style="background:#f59e0b"></span> Client error (4xx) &nbsp;
   <span class="dot" style="background:#ef4444"></span> Server error (5xx) &nbsp;
-  <span class="dot" style="background:#a855f7"></span> Connection error
+  <span class="dot" style="background:#a855f7"></span> Connection error &nbsp;
+  <span class="dot" style="background:#2dd4bf"></span> Empty / placeholder link
 </div>
 
 <script>
@@ -1046,6 +1160,7 @@ function print_summary(array $crawl, array $agg): void {
     printf("  Results       : ✓ %d OK   → %d redirect   ✗ %d 4xx   ✗ %d 5xx   ⚠ %d conn\n",
         $c['ok'], $c['redirect'], $c['client'], $c['server'], $c['conn']);
     printf("  Broken total  : %d\n", $agg['broken']);
+    printf("  Placeholders  : %d  (empty / # / javascript: links)\n", $agg['placeholders']);
 
     if ($agg['broken'] > 0) {
         echo "\n  Broken links:\n";

@@ -53,11 +53,12 @@ No Node.js, no Composer, no external services.
 
 ## Report contents
 
-1. **Links by Status** — counts of OK / Redirect / 4xx / 5xx / Connection error, internal vs external totals.
+1. **Links by Status** — counts of OK / Redirect / 4xx / 5xx / Connection error / Empty anchors, internal vs external totals.
 2. **Broken Links** — headline table with status badge, class, broken URL, link type, and the page it was found on.
-3. **Pages That Failed To Load** — internal pages the crawler itself could not fetch.
-4. **By Status Code** — code-level breakdown table.
-5. **All Tested Links** — full filterable table (All / Broken only / OK / Redirect / 4xx / 5xx / Connection).
+3. **Placeholder Anchors (`href="#"`)** — `<a href="#">` links that point nowhere (dead/unfinished links), with their anchor text and source page. Real in-page anchors like `#section` are **not** flagged.
+4. **Pages That Failed To Load** — internal pages the crawler itself could not fetch.
+5. **By Status Code** — code-level breakdown table.
+6. **All Tested Links** — full filterable table (All / Broken only / OK / Redirect / 4xx / 5xx / Connection / Anchors).
 
 The CSV mirrors the full link data for spreadsheets / BI tools.
 
