@@ -1,0 +1,20 @@
+{
+  "name": "broken-link-bulk-scanner",
+  "version": "1.0.0",
+  "description": "Headless rendering engine for the Broken Link Bulk Scanner. Driven by link_checker.php; renders each page with Playwright Chromium so JavaScript-built links (SPAs) are discovered. Works on macOS, Windows and Linux.",
+  "license": "MIT",
+  "private": true,
+  "bin": {
+    "render-runner": "render-runner.js"
+  },
+  "scripts": {
+    "postinstall": "echo '\\nNext: install the browser engine ->  npx playwright install chromium\\n'",
+    "browser": "playwright install chromium"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "playwright": "^1.61.1"
+  }
+}

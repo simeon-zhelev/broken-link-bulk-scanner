@@ -40,6 +40,8 @@ function web_args(array $r, string $htmlPath, string $csvPath): array {
         'render-wait'        => max(100, min(30000, (int)($r['render-wait'] ?? 4000))),
         'render-concurrency' => 3,
         'chrome-bin'         => '',
+        'node'               => 'node',
+        'runner'             => __DIR__ . '/render-runner.js',
         'user-agent'      => DEFAULT_UA,
         'output'          => $htmlPath,
         'csv'             => $csvPath,
@@ -68,7 +70,12 @@ $val = [
     'render'         => !empty($req['render']),
     'render-wait'    => (int)($req['render-wait'] ?? 4000),
 ];
-$chromeBin = find_chrome([]);   // null if no Chrome/Chromium/Edge/Brave found
+// Rendering is available when Node + Playwright are set up (cross-platform).
+$renderProblem = render_preflight_problem([
+    'node'   => 'node',
+    'runner' => __DIR__ . '/render-runner.js',
+]);
+$renderReady = ($renderProblem === null);
 function e($s) { return htmlspecialchars((string)$s, ENT_QUOTES); }
 ?>
 <!DOCTYPE html>
@@ -165,17 +172,17 @@ function e($s) { return htmlspecialchars((string)$s, ENT_QUOTES); }
   </div>
 
   <div class="check" style="margin-top:18px">
-    <input type="checkbox" id="render" name="render" value="1" <?= $val['render']?'checked':'' ?> <?= $chromeBin ? '' : 'disabled' ?>>
+    <input type="checkbox" id="render" name="render" value="1" <?= $val['render']?'checked':'' ?> <?= $renderReady ? '' : 'disabled' ?>>
     <label for="render">
-      Render JavaScript with headless Chrome
-      <?php if ($chromeBin): ?>
+      Render JavaScript with headless Chromium
+      <?php if ($renderReady): ?>
         <span style="color:#64748b">— slower, but finds links built by JS (SPAs)</span>
       <?php else: ?>
-        <span style="color:#f59e0b">— no Chrome/Chromium found, so this is unavailable</span>
+        <span style="color:#f59e0b">— setup needed, so this is unavailable (run <code>npm install &amp;&amp; npx playwright install chromium</code>)</span>
       <?php endif; ?>
     </label>
   </div>
-  <?php if ($chromeBin): ?>
+  <?php if ($renderReady): ?>
   <div class="row" id="render-opts" style="<?= $val['render'] ? '' : 'display:none' ?>">
     <div>
       <label for="render-wait">JS settle time (ms)</label>
