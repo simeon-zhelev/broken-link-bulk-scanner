@@ -1301,13 +1301,17 @@ HTML;
 // ─────────────────────────────────────────────────────────────────────────────
 
 function build_csv(array $crawl): string {
-    $fields = ['link_url', 'status_code', 'classification', 'label', 'final_url',
-               'method', 'redirects', 'link_type', 'scope', 'source_page', 'error'];
+    // source_page comes right after link_url so every row — especially "#"
+    // placeholders, whose link_url/final_url are both just "#" — immediately
+    // shows where the link was found instead of burying it in a late column.
+    $fields = ['link_url', 'source_page', 'status_code', 'classification', 'label', 'final_url',
+               'method', 'redirects', 'link_type', 'scope', 'error'];
     $fh = fopen('php://temp', 'r+');
     fputcsv($fh, $fields);
     foreach ($crawl['results'] as $r) {
         fputcsv($fh, [
             $r['url'],
+            $r['source'],
             $r['code'] > 0 ? $r['code'] : '0',
             $r['class'],
             $r['label'],
@@ -1316,7 +1320,6 @@ function build_csv(array $crawl): string {
             $r['redirects'],
             $r['type'],
             $r['internal'] ? 'internal' : 'external',
-            $r['source'],
             $r['error'],
         ]);
     }
