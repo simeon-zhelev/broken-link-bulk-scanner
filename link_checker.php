@@ -1,4 +1,3 @@
-#!/usr/bin/env php
 <?php
 /**
  * Broken Link Bulk Scanner  (plain PHP 8.x — cURL + DOM)
@@ -1210,4 +1209,8 @@ function main(array $argv): void {
     print_summary($crawl, $agg);
 }
 
-main($argv);
+// Only auto-run from the command line. When this file is included from the
+// web UI (index.php) the functions above are reused without running main().
+if (PHP_SAPI === 'cli') {
+    main($argv);
+}

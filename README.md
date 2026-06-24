@@ -2,6 +2,11 @@
 
 Crawl an entire website and surface every dead link — all in a self-contained dark-themed HTML dashboard + CSV export.
 
+Use it either way:
+
+- **Browser UI** — `php -S localhost:8090`, open the page, type a URL, watch a live progress log, then read the report inline. ([jump to setup](#quick-start--web-ui))
+- **Command line** — `php link_checker.php --url=…` for scripting and cron. ([jump to setup](#quick-start--cli))
+
 Works with any site (WordPress, Shopify, static, …) — no API key, no account required. Everything runs locally via plain PHP + cURL.
 
 ## How it works
@@ -12,7 +17,22 @@ Works with any site (WordPress, Shopify, static, …) — no API key, no account
 - a CSV export (`link_report.csv`)
 - a live console progress log + final summary
 
-## Quick start
+`index.php` is a thin web wrapper over the same engine — it reuses the crawler and report builders directly (no duplicated logic), streams the progress log live to the browser, and embeds the finished report on the page.
+
+## Quick start — Web UI
+
+Prefer a browser? Start PHP's built-in server in the project directory and open the page:
+
+```bash
+php -S localhost:8090
+# then open http://localhost:8090
+```
+
+Enter a URL, pick a few options (scan mode, max pages/depth, concurrency, asset/robots/TLS toggles), and hit **Scan**. You'll see a **live progress log** while it crawls, then the full report embedded on the page with **Open report** and **Download CSV** buttons. Reports are written to a local `reports/` folder (git-ignored).
+
+> Run the UI **locally only** — it fetches whatever URL you type, so don't expose it on a public host without adding your own authentication.
+
+## Quick start — CLI
 
 ```bash
 # Whole-site scan (up to 100 pages, depth 3)
@@ -82,7 +102,8 @@ Cron example — every Monday at 07:00:
 
 ```
 sitelinks-bulk-scanner/
-├── link_checker.php   # crawler + report generator (run this)
+├── link_checker.php   # crawler + report generator (run this from the CLI)
+├── index.php          # web UI — `php -S localhost:8090`, then open in a browser
 ├── examples/          # sample HTML + CSV report (demo data, no real site)
 ├── README.md
 └── LICENSE            # MIT
