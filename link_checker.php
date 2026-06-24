@@ -68,6 +68,10 @@ function parse_args(array $argv): array {
         'max-redirs'      => 10,
         'respect-robots'  => true,
         'verify-tls'      => true,
+        'render'             => false,    // render pages in headless Chrome (run JS)
+        'render-wait'        => 4000,     // virtual-time budget per page, in ms
+        'render-concurrency' => 3,        // parallel Chrome processes (heavy)
+        'chrome-bin'         => '',        // explicit Chrome/Chromium binary path
         'user-agent'      => DEFAULT_UA,
         'output'          => 'link_report.html',
         'csv'             => 'link_report.csv',
@@ -76,6 +80,7 @@ function parse_args(array $argv): array {
     $opts = getopt('', [
         'url:', 'mode:', 'max-pages:', 'max-depth:', 'concurrency:', 'delay:', 'no-assets',
         'connect-timeout:', 'timeout:', 'max-redirs:', 'ignore-robots',
+        'render', 'render-wait:', 'render-concurrency:', 'chrome-bin:',
         'insecure', 'user-agent:', 'output:', 'csv:', 'help',
     ]);
 
@@ -99,6 +104,11 @@ Options:
   --timeout=S          cURL total timeout in seconds (default 20)
   --max-redirs=N       Max redirects to follow per link (default 10)
   --ignore-robots      Do NOT honour robots.txt (default: honour it)
+  --render             Render each page in headless Chrome so JavaScript-built
+                       markup/links are seen (needs Chrome/Chromium/Edge/Brave)
+  --render-wait=MS     JS settle time per page in render mode (default 4000)
+  --render-concurrency=N  Parallel Chrome processes in render mode (default 3)
+  --chrome-bin=PATH    Explicit browser binary (else auto-detected / \$CHROME_BIN)
   --insecure           Skip TLS certificate verification
   --user-agent=STR     Override the crawler User-Agent
   --output=FILE        HTML report path (default link_report.html)
@@ -126,6 +136,10 @@ HELP);
     $args['check-assets']    = !isset($opts['no-assets']);
     $args['respect-robots']  = !isset($opts['ignore-robots']);
     $args['verify-tls']      = !isset($opts['insecure']);
+    $args['render']             = isset($opts['render']);
+    $args['render-wait']        = max(100, (int)($opts['render-wait'] ?? $defaults['render-wait']));
+    $args['render-concurrency'] = max(1, (int)($opts['render-concurrency'] ?? $defaults['render-concurrency']));
+    $args['chrome-bin']         = isset($opts['chrome-bin']) ? (string)$opts['chrome-bin'] : $defaults['chrome-bin'];
     $args['user-agent']      = isset($opts['user-agent']) ? (string)$opts['user-agent'] : $defaults['user-agent'];
     $args['output']          = isset($opts['output']) ? (string)$opts['output'] : $defaults['output'];
     $args['csv']             = isset($opts['csv']) ? (string)$opts['csv'] : $defaults['csv'];
@@ -449,6 +463,137 @@ function http_multi(array $jobs, array $args, int $concurrency): array {
     return $results;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Headless-Chrome rendering (optional --render mode)
+//
+//  By default we extract links from the raw HTML cURL downloads. Sites that
+//  build their markup with JavaScript (SPAs, lazy-loaded menus, …) expose few
+//  or no links that way. With --render we additionally load each page in
+//  headless Chrome, let its scripts run, and extract links from the resulting
+//  live DOM instead. cURL is still used for the HTTP status / content-type and
+//  for testing every discovered link — Chrome only supplies the richer markup.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Locate a Chrome/Chromium/Edge/Brave binary, or null if none is available. */
+function find_chrome(array $args): ?string {
+    $explicit = trim((string)($args['chrome-bin'] ?? ''));
+    if ($explicit !== '') return is_executable($explicit) ? $explicit : null;
+
+    $env = getenv('CHROME_BIN') ?: getenv('CHROME_PATH') ?: '';
+    if ($env !== '' && is_executable($env)) return $env;
+
+    $apps = [
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        '/Applications/Chromium.app/Contents/MacOS/Chromium',
+        '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+        '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+    ];
+    foreach ($apps as $p) if (is_executable($p)) return $p;
+
+    foreach (['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'chrome'] as $name) {
+        $p = trim((string)@shell_exec('command -v ' . escapeshellarg($name) . ' 2>/dev/null'));
+        if ($p !== '' && is_executable($p)) return $p;
+    }
+    return null;
+}
+
+/** Build the headless-Chrome argv for one URL. */
+function chrome_cmd(string $chrome, string $url, array $args, string $userDataDir, int $waitMs): array {
+    $cmd = [
+        $chrome,
+        '--headless=new',
+        '--disable-gpu',
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-extensions',
+        '--disable-background-networking',
+        '--hide-scrollbars',
+        '--mute-audio',
+        '--user-data-dir=' . $userDataDir,
+        '--user-agent=' . $args['user-agent'],
+        '--virtual-time-budget=' . $waitMs,   // let timers / fetches run, then stop
+        '--dump-dom',                          // print the serialized live DOM
+    ];
+    if (!$args['verify-tls']) $cmd[] = '--ignore-certificate-errors';
+    $cmd[] = $url;
+    return $cmd;
+}
+
+/**
+ * Render a batch of page URLs in headless Chrome, up to
+ * $args['render-concurrency'] processes at once. Returns  url => rendered HTML
+ * (or null when a render failed/timed out, so callers fall back to static HTML).
+ *
+ * --dump-dom prints the DOM but the "new" headless does not always exit, so each
+ * process is read non-blocking and reaped as soon as a complete document arrives
+ * or its deadline passes — then hard-killed. Throwaway profile dirs are removed.
+ */
+function render_multi(array $urls, array $args, string $chrome): array {
+    $urls  = array_values(array_unique($urls));
+    $total = count($urls);
+    $out   = [];
+    if ($total === 0) return $out;
+
+    $waitMs = max(100, (int)$args['render-wait']);
+    $conc   = max(1, min((int)$args['render-concurrency'], $total));
+    $grace  = $waitMs / 1000 + 8.0;   // wall-clock budget per render, in seconds
+
+    $next  = 0;
+    $procs = [];   // index => state
+
+    $spawn = function () use (&$next, &$procs, $urls, $total, $chrome, $args, $waitMs, $grace) {
+        if ($next >= $total) return;
+        $url = $urls[$next++];
+        $dir = sys_get_temp_dir() . '/blbs-chrome-' . getmypid() . '-' . $next . '-' . substr(md5($url), 0, 8);
+        @mkdir($dir, 0700, true);
+        $desc = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+        $proc = @proc_open(chrome_cmd($chrome, $url, $args, $dir, $waitMs), $desc, $pipes);
+        if (!is_resource($proc)) { @exec('rm -rf ' . escapeshellarg($dir)); return; }
+        fclose($pipes[0]);
+        stream_set_blocking($pipes[1], false);
+        stream_set_blocking($pipes[2], false);
+        $procs[] = [
+            'proc' => $proc, 'out' => $pipes[1], 'err' => $pipes[2],
+            'url' => $url, 'buf' => '', 'dir' => $dir,
+            'deadline' => microtime(true) + $grace,
+        ];
+    };
+
+    for ($i = 0; $i < $conc; $i++) $spawn();
+
+    while ($procs) {
+        usleep(60_000);
+        $finished = [];
+        foreach ($procs as $idx => $p) {
+            $chunk = stream_get_contents($p['out']);
+            if ($chunk !== false && $chunk !== '') $procs[$idx]['buf'] .= $chunk;
+            $st = proc_get_status($p['proc']);
+            if (!$st['running']
+                || stripos($procs[$idx]['buf'], '</html>') !== false
+                || microtime(true) >= $p['deadline']) {
+                $finished[] = $idx;
+            }
+        }
+        foreach ($finished as $idx) {
+            $p = $procs[$idx];
+            usleep(50_000);
+            $tail = stream_get_contents($p['out']);
+            if ($tail !== false && $tail !== '') $p['buf'] .= $tail;
+            @fclose($p['out']);
+            @fclose($p['err']);
+            @proc_terminate($p['proc'], 9);
+            @proc_close($p['proc']);
+            @exec('rm -rf ' . escapeshellarg($p['dir']));
+            $out[$p['url']] = $p['buf'] !== '' ? $p['buf'] : null;
+            unset($procs[$idx]);
+            $spawn();
+        }
+    }
+    return $out;
+}
+
 /**
  * Test a batch of links in parallel. Mirrors the single-link policy: try a
  * cheap HEAD for every URL first, then re-test with GET only those the server
@@ -610,6 +755,15 @@ function crawl(array $args): array {
                      : "🤖 No robots.txt restrictions found.\n";
     }
 
+    // Resolve a headless-Chrome binary once if JS rendering was requested.
+    $chrome = null;
+    if (!empty($args['render'])) {
+        $chrome = find_chrome($args);
+        echo $chrome
+            ? "🧭 JS rendering ON — headless Chrome: {$chrome}\n"
+            : "⚠  --render requested but no Chrome/Chromium found — using static HTML instead.\n";
+    }
+
     $level   = [$start];           // page URLs to fetch at the current depth
     $queued  = [$start => true];   // every URL ever enqueued (avoid dupes)
     $visited = [];                 // pages actually fetched
@@ -645,6 +799,29 @@ function crawl(array $args): array {
         $pageResps = http_multi($fetchJobs, $args, $args['concurrency']);
         $pagesFetched += count($pageResps);
 
+        // In render mode, re-load each OK HTML page in headless Chrome and swap
+        // its static body for the JS-rendered DOM (cURL still owns the status).
+        if ($chrome) {
+            $renderUrls = [];
+            foreach ($pageResps as $pageUrl => $resp) {
+                if ($resp['errno'] === 0 && $resp['code'] > 0 && $resp['code'] < 400
+                    && stripos($resp['ctype'], 'html') !== false) {
+                    $renderUrls[] = $resp['final'] ?: $pageUrl;
+                }
+            }
+            if ($renderUrls) {
+                echo "  🧭 rendering " . count($renderUrls) . " page(s) with headless Chrome…\n";
+                $rendered = render_multi($renderUrls, $args, $chrome);
+                foreach ($pageResps as $pageUrl => $resp) {
+                    $key = $resp['final'] ?: $pageUrl;
+                    if (!empty($rendered[$key])) {
+                        $pageResps[$pageUrl]['body']     = $rendered[$key];
+                        $pageResps[$pageUrl]['rendered'] = true;
+                    }
+                }
+            }
+        }
+
         // Extract links from every fetched page; collect the links not yet
         // tested, and queue internal <a> targets for the next depth level.
         $nextLevel = [];
@@ -662,7 +839,8 @@ function crawl(array $args): array {
             }
 
             $links = extractLinks($resp['body'], $resp['final'] ?: $pageUrl, $args['check-assets']);
-            echo "  • {$pageUrl} — " . count($links) . " link(s)\n";
+            $tag = !empty($resp['rendered']) ? ' [rendered]' : '';
+            echo "  • {$pageUrl} — " . count($links) . " link(s){$tag}\n";
 
             foreach ($links as $lnk) {
                 // Empty/placeholder anchors point nowhere — record them
@@ -1009,6 +1187,7 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
     $modeEsc  = $args['mode'] === 'site' ? 'Whole site' : 'Single page';
     $assetsEsc = $args['check-assets'] ? 'a, img, link, script' : 'a only';
     $robotsEsc = $args['respect-robots'] ? 'honoured' : 'ignored';
+    $renderEsc = !empty($args['render']) ? 'on (headless Chrome)' : 'off';
     $concEsc   = (int)$args['concurrency'];
     $pages = $crawl['pagesFetched'];
     $total = $agg['totalLinks'];
@@ -1074,6 +1253,7 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
   Links tested: <strong>$total</strong><br>
   Checked elements: <strong>$assetsEsc</strong> &nbsp;|&nbsp;
   robots.txt: <strong>$robotsEsc</strong> &nbsp;|&nbsp;
+  JS rendering: <strong>$renderEsc</strong> &nbsp;|&nbsp;
   Concurrency: <strong>$concEsc</strong> &nbsp;|&nbsp;
   Generated: <strong>$generatedAt</strong>
 </div>

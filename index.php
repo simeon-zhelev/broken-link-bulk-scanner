@@ -36,6 +36,10 @@ function web_args(array $r, string $htmlPath, string $csvPath): array {
         'max-redirs'      => 10,
         'respect-robots'  => !empty($r['respect-robots']),
         'verify-tls'      => !empty($r['verify-tls']),
+        'render'             => !empty($r['render']),
+        'render-wait'        => max(100, min(30000, (int)($r['render-wait'] ?? 4000))),
+        'render-concurrency' => 3,
+        'chrome-bin'         => '',
         'user-agent'      => DEFAULT_UA,
         'output'          => $htmlPath,
         'csv'             => $csvPath,
@@ -60,7 +64,11 @@ $val = [
     'check-assets'   => $submitted ? !empty($req['check-assets'])   : true,
     'respect-robots' => $submitted ? !empty($req['respect-robots']) : true,
     'verify-tls'     => $submitted ? !empty($req['verify-tls'])     : true,
+    // JS rendering: default OFF (slower, needs a browser installed)
+    'render'         => !empty($req['render']),
+    'render-wait'    => (int)($req['render-wait'] ?? 4000),
 ];
+$chromeBin = find_chrome([]);   // null if no Chrome/Chromium/Edge/Brave found
 function e($s) { return htmlspecialchars((string)$s, ENT_QUOTES); }
 ?>
 <!DOCTYPE html>
@@ -155,6 +163,32 @@ function e($s) { return htmlspecialchars((string)$s, ENT_QUOTES); }
     <div class="check"><input type="checkbox" id="respect-robots" name="respect-robots" value="1" <?= $val['respect-robots']?'checked':'' ?>><label for="respect-robots">Honour robots.txt</label></div>
     <div class="check"><input type="checkbox" id="verify-tls" name="verify-tls" value="1" <?= $val['verify-tls']?'checked':'' ?>><label for="verify-tls">Verify TLS certificates</label></div>
   </div>
+
+  <div class="check" style="margin-top:18px">
+    <input type="checkbox" id="render" name="render" value="1" <?= $val['render']?'checked':'' ?> <?= $chromeBin ? '' : 'disabled' ?>>
+    <label for="render">
+      Render JavaScript with headless Chrome
+      <?php if ($chromeBin): ?>
+        <span style="color:#64748b">— slower, but finds links built by JS (SPAs)</span>
+      <?php else: ?>
+        <span style="color:#f59e0b">— no Chrome/Chromium found, so this is unavailable</span>
+      <?php endif; ?>
+    </label>
+  </div>
+  <?php if ($chromeBin): ?>
+  <div class="row" id="render-opts" style="<?= $val['render'] ? '' : 'display:none' ?>">
+    <div>
+      <label for="render-wait">JS settle time (ms)</label>
+      <input type="number" id="render-wait" name="render-wait" min="100" max="30000" step="100" value="<?= e($val['render-wait']) ?>">
+    </div>
+    <div style="flex:3"></div>
+  </div>
+  <script>
+    document.getElementById('render').addEventListener('change', function () {
+      document.getElementById('render-opts').style.display = this.checked ? '' : 'none';
+    });
+  </script>
+  <?php endif; ?>
 
   <button class="go" type="submit" <?= $extError ? 'disabled' : '' ?>>Scan for broken links →</button>
 </form>
