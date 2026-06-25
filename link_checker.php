@@ -590,7 +590,10 @@ function render_multi(array $urls, array $args): array {
                 continue;
             }
             if ($stream === $pipes[2]) {
-                fwrite(STDERR, $chunk);                  // pass runner progress through
+                // Pass the runner's live progress through. STDERR only exists in
+                // the CLI SAPI; under the web UI, echo it into the progress log.
+                if (defined('STDERR')) fwrite(STDERR, $chunk);
+                else echo $chunk;
             } else {
                 $buf .= $chunk;
                 while (($nl = strpos($buf, "\n")) !== false) {
@@ -700,11 +703,24 @@ function extractLinks(string $html, string $pageUrl, bool $checkAssets): array {
             if ($type === 'a' && ($reason = placeholder_reason($raw)) !== null) {
                 $text = trim(preg_replace('/\s+/', ' ', $node->textContent ?? ''));
                 if (mb_strlen($text) > 80) $text = mb_substr($text, 0, 80) . '…';
+
+                // Capture the anchor's opening tag with all its attributes plus
+                // its text, so the report can show the whole element (e.g.
+                // <a href="#" id="tab1">Link One</a>) for much better context
+                // than the bare href alone.
+                $openTag = '<a';
+                foreach ($node->attributes as $attrNode) {
+                    $openTag .= ' ' . $attrNode->nodeName . '="' . $attrNode->nodeValue . '"';
+                }
+                $openTag .= '>';
+                $element = $openTag . $text . '</a>';
+                if (mb_strlen($element) > 200) $element = mb_substr($element, 0, 200) . '…';
+
                 $key = 'placeholder|' . $reason[0] . '|' . $text;
                 if (isset($seen[$key])) continue;   // de-dupe within a page
                 $seen[$key] = true;
                 $found[] = ['url' => $raw === '' ? '(empty href)' : $raw, 'type' => 'a',
-                            'raw' => $raw, 'placeholder' => true,
+                            'raw' => $raw, 'placeholder' => true, 'element' => $element,
                             'reasonKey' => $reason[0], 'reason' => $reason[1], 'text' => $text];
                 continue;
             }
@@ -871,6 +887,7 @@ function crawl(array $args): array {
                     if (!isset($tested[$key])) {
                         $tested[$key] = [
                             'url'       => $lnk['url'],
+                            'element'   => $lnk['element'] ?? '',
                             'code'      => 0,
                             'class'     => 'placeholder',
                             'label'     => $lnk['reason'],
@@ -1081,7 +1098,11 @@ function placeholder_table(array $crawl): string {
         if ($r['class'] !== 'placeholder') continue;
         $i++;
         $color = class_color('placeholder');
-        $href  = '<code>href="' . htmlspecialchars($r['url'] === '(empty href)' ? '' : $r['url']) . '"</code>';
+        // Prefer the full element markup (<a href="#" id="tab1">…</a>) for
+        // context; fall back to the bare href for older reports without it.
+        $href  = !empty($r['element'])
+            ? '<code>' . htmlspecialchars($r['element']) . '</code>'
+            : '<code>href="' . htmlspecialchars($r['url'] === '(empty href)' ? '' : $r['url']) . '"</code>';
         $text  = $r['error'] !== '' ? htmlspecialchars($r['error']) : '—';
         $rows .= "<tr>"
                . "<td class=\"num\">$i</td>"
@@ -1097,7 +1118,7 @@ function placeholder_table(array $crawl): string {
 <div class="section-title">🔗 Empty / Placeholder Links</div>
 <div class="table-wrap" style="margin-top:10px">
   <table>
-    <thead><tr><th>#</th><th style="text-align:left">Href</th><th style="text-align:left">Reason</th>
+    <thead><tr><th>#</th><th style="text-align:left">Element</th><th style="text-align:left">Reason</th>
       <th style="text-align:left">Link text</th><th style="text-align:left">Found on page</th></tr></thead>
     <tbody>$rows</tbody>
   </table>
