@@ -377,6 +377,14 @@ function curl_options(string $method, array $args): array {
         CURLOPT_AUTOREFERER    => true,
         CURLOPT_NOBODY         => ($method === 'HEAD'),
         CURLOPT_HTTPGET        => ($method === 'GET'),
+        // Send the Accept / Accept-Language headers every real browser sends.
+        // Without them, advertising compression (CURLOPT_ENCODING) but no Accept
+        // headers is a classic bot signature that some WAFs (LiteSpeed, mod_
+        // security, …) answer with a 403 — even though the page is public.
+        CURLOPT_HTTPHEADER     => [
+            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language: en-US,en;q=0.9',
+        ],
     ];
     if ($method === 'HEAD') {
         $opts[CURLOPT_CUSTOMREQUEST] = 'HEAD';
