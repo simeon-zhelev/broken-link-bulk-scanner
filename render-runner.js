@@ -24,8 +24,10 @@
  *
  * Output (stdout), one line per URL:
  *   {"type":"meta","total":12}
- *   {"type":"result","url":"...","ok":true,"html":"<!doctype html>…"}
- *   {"type":"result","url":"...","ok":false,"error":"Timeout 15000ms exceeded"}
+ *   {"type":"result","url":"...","ok":true,"status":200,"ctype":"text/html","finalUrl":"...","html":"<!doctype html>…"}
+ *   {"type":"result","url":"...","ok":false,"status":429,"error":"Timeout 15000ms exceeded"}
+ * status/ctype/finalUrl come from the last main-frame document response, so they
+ * reflect what the browser ended up on after any client-side redirect/challenge.
  *
  * Progress lines are written to stderr (so they don't pollute the NDJSON).
  *
@@ -112,23 +114,53 @@ async function renderUrl(browser, urlObj, opts) {
     bypassCSP: true,
   });
   const page = await context.newPage();
+
+  // Track the last main-frame *document* response so we can report the HTTP
+  // status a real browser actually ended up on — after any client-side
+  // challenge or redirect (e.g. Cloudflare's JS bot check) has run. This is the
+  // status PHP trusts in render mode, so the crawl reflects the browser's view
+  // rather than cURL's (which such challenges block outright).
+  let docStatus = 0;
+  let docType = '';
+  page.on('response', (resp) => {
+    try {
+      const req = resp.request();
+      if (req.resourceType() === 'document' && resp.frame() === page.mainFrame()) {
+        docStatus = resp.status();
+        docType = resp.headers()['content-type'] || '';
+      }
+    } catch (_) { /* some responses expose neither frame nor request */ }
+  });
+
   try {
     // Get the document, then give scripts/fetches time to settle, mirroring the
     // old --virtual-time-budget behaviour.
-    await page.goto(urlObj.url, { waitUntil: 'domcontentloaded', timeout: opts.timeout });
+    const navResp = await page.goto(urlObj.url, { waitUntil: 'domcontentloaded', timeout: opts.timeout });
+    if (navResp && !docStatus) {
+      docStatus = navResp.status();
+      docType = navResp.headers()['content-type'] || '';
+    }
     // Best-effort "network is quiet" wait, capped so a chatty page can't hang us.
+    // A challenge that resolves during this window updates docStatus via the
+    // response listener above.
     await page
       .waitForLoadState('networkidle', { timeout: Math.min(opts.wait + 5000, opts.timeout) })
       .catch(() => {});
     if (opts.wait > 0) await page.waitForTimeout(opts.wait);
 
     const html = await page.content();
-    return { type: 'result', url: urlObj.url, ok: true, html };
+    return {
+      type: 'result', url: urlObj.url, ok: true,
+      status: docStatus, ctype: docType, finalUrl: page.url(), html,
+    };
   } catch (err) {
     return {
       type: 'result',
       url: urlObj.url,
       ok: false,
+      status: docStatus,
+      ctype: docType,
+      finalUrl: page.url(),
       error: (err && err.message ? err.message : String(err)).split('\n')[0].slice(0, 200),
     };
   } finally {
@@ -152,7 +184,9 @@ async function runPool(browser, urls, opts) {
       const res = await renderUrl(browser, urlObj, opts);
       done++;
       emit(res);
-      const tag = res.ok ? `✓ rendered (${res.html.length} bytes)` : `✗ ${res.error}`;
+      const tag = res.ok
+        ? `✓ HTTP ${res.status || '?'} (${res.html.length} bytes)`
+        : `✗ ${res.error}`;
       process.stderr.write(`  [${done}/${total}] ${tag}  ${urlObj.url}\n`);
     }
   }

@@ -477,11 +477,13 @@ function http_multi(array $jobs, array $args, int $concurrency): array {
 //
 //  By default we extract links from the raw HTML cURL downloads. Sites that
 //  build their markup with JavaScript (SPAs, lazy-loaded menus, …) expose few
-//  or no links that way. With --render we additionally load each page in a
-//  headless browser, let its scripts run, and extract links from the resulting
-//  live DOM instead. cURL is still used for the HTTP status / content-type and
-//  for testing every discovered link — the browser only supplies the richer
-//  markup.
+//  or no links that way. With --render we instead fetch each page in a headless
+//  browser, let its scripts run, and extract links from the resulting live DOM.
+//  In render mode the browser also owns the page's HTTP status / content-type
+//  (taken from the navigation it ends up on), which lets the crawl get past
+//  client-side bot challenges — e.g. Cloudflare's JS check returns 429 to cURL
+//  but a real browser runs the challenge and loads the page. cURL is still used
+//  for testing every discovered link; the browser only handles page fetching.
 //
 //  Rendering is delegated to a small Node helper (render-runner.js) driven by
 //  Playwright, exactly like the Accessibility Bulk Scanner's axe-runner.js. PHP
@@ -519,8 +521,11 @@ function render_preflight_problem(array $args): ?string {
 
 /**
  * Render a batch of page URLs by driving the Playwright Node runner once.
- * Returns  url => rendered HTML  (or null when a render failed, so callers fall
- * back to the static cURL HTML). The runner renders up to
+ * Returns  url => ['ok'=>bool, 'status'=>int, 'ctype'=>string, 'final'=>string,
+ * 'html'=>string, 'error'=>string]  — the status/content-type/final URL the
+ * browser ended up on (after any client-side redirect/challenge) plus the
+ * rendered DOM. URLs the runner never reported back are simply absent from the
+ * result, so callers can fall back to a cURL fetch. The runner renders up to
  * $args['render-concurrency'] pages at a time and streams results back as
  * NDJSON; its stderr (live progress) is passed straight through.
  */
@@ -572,9 +577,15 @@ function render_multi(array $urls, array $args): array {
         if ($line === '') return;
         $obj = json_decode($line, true);
         if (!is_array($obj) || ($obj['type'] ?? '') !== 'result') return;
-        if (!empty($obj['url'])) {
-            $out[$obj['url']] = !empty($obj['ok']) && isset($obj['html']) ? $obj['html'] : null;
-        }
+        if (empty($obj['url'])) return;
+        $out[$obj['url']] = [
+            'ok'     => !empty($obj['ok']),
+            'status' => (int)($obj['status'] ?? 0),
+            'ctype'  => (string)($obj['ctype'] ?? ''),
+            'final'  => (string)($obj['finalUrl'] ?? $obj['url']),
+            'html'   => isset($obj['html']) ? (string)$obj['html'] : '',
+            'error'  => (string)($obj['error'] ?? ''),
+        ];
     };
 
     while ($open) {
@@ -608,6 +619,52 @@ function render_multi(array $urls, array $args): array {
     proc_close($proc);
     @unlink($tmp);
     return $out;
+}
+
+/**
+ * Fetch a batch of pages with the headless browser instead of cURL (render
+ * mode). Returns the same  key => result  shape as http_multi(), but with the
+ * status, content-type, final URL and body taken from a real browser
+ * navigation. This is what lets the crawl get past client-side bot challenges
+ * (e.g. Cloudflare's JS check) that reject cURL outright — a real browser runs
+ * the challenge, so the page (and the status we record) is the post-challenge
+ * one. Any page the browser can't fetch falls back to a cURL GET, so a runner
+ * failure never blanks out the crawl.
+ */
+function render_pages(array $fetchJobs, array $args): array {
+    $urls = array_map(fn($job) => $job['url'], $fetchJobs);
+    echo "  🧭 fetching " . count($urls) . " page(s) with headless Chromium…\n";
+    $rendered = render_multi($urls, $args);
+
+    $pageResps = [];
+    $needCurl  = [];   // pages the browser couldn't fetch → cURL fallback
+    foreach ($fetchJobs as $job) {
+        $u = $job['url'];
+        $r = $rendered[$u] ?? null;
+        if (is_array($r) && $r['ok'] && $r['status'] > 0) {
+            $pageResps[$u] = [
+                'body'      => $r['html'],
+                'code'      => $r['status'],
+                'final'     => $r['final'] !== '' ? $r['final'] : $u,
+                'ctype'     => $r['ctype'],
+                'redirects' => 0,
+                'errno'     => 0,
+                'error'     => '',
+                'method'    => 'GET',
+                'rendered'  => true,
+            ];
+        } else {
+            $needCurl[] = $job;
+        }
+    }
+
+    if ($needCurl) {
+        echo "  ↩ " . count($needCurl) . " page(s) the browser couldn't fetch — falling back to cURL\n";
+        foreach (http_multi($needCurl, $args, $args['concurrency']) as $u => $resp) {
+            $pageResps[$u] = $resp;
+        }
+    }
+    return $pageResps;
 }
 
 /**
@@ -832,31 +889,17 @@ function crawl(array $args): array {
 
         echo "\n── depth {$depth} — fetching " . count($fetchJobs) . " page(s) in parallel\n";
         polite_delay($args);
-        $pageResps = http_multi($fetchJobs, $args, $args['concurrency']);
-        $pagesFetched += count($pageResps);
 
-        // In render mode, re-load each OK HTML page in headless Chromium and swap
-        // its static body for the JS-rendered DOM (cURL still owns the status).
+        // In render mode the browser — not cURL — fetches pages, so JS-built
+        // markup is captured and client-side bot challenges (e.g. Cloudflare)
+        // get a chance to resolve; the status we record is the one the browser
+        // ended up on. Otherwise pages are fetched with plain cURL.
         if ($renderReady) {
-            $renderUrls = [];
-            foreach ($pageResps as $pageUrl => $resp) {
-                if ($resp['errno'] === 0 && $resp['code'] > 0 && $resp['code'] < 400
-                    && stripos($resp['ctype'], 'html') !== false) {
-                    $renderUrls[] = $resp['final'] ?: $pageUrl;
-                }
-            }
-            if ($renderUrls) {
-                echo "  🧭 rendering " . count($renderUrls) . " page(s) with headless Chromium…\n";
-                $rendered = render_multi($renderUrls, $args);
-                foreach ($pageResps as $pageUrl => $resp) {
-                    $key = $resp['final'] ?: $pageUrl;
-                    if (!empty($rendered[$key])) {
-                        $pageResps[$pageUrl]['body']     = $rendered[$key];
-                        $pageResps[$pageUrl]['rendered'] = true;
-                    }
-                }
-            }
+            $pageResps = render_pages($fetchJobs, $args);
+        } else {
+            $pageResps = http_multi($fetchJobs, $args, $args['concurrency']);
         }
+        $pagesFetched += count($pageResps);
 
         // Extract links from every fetched page; collect the links not yet
         // tested, and queue internal <a> targets for the next depth level.
