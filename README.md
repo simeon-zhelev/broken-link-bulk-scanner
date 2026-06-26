@@ -17,6 +17,7 @@ With `--render`, each page is additionally loaded in **headless Chromium** (via 
 
 - a self-contained dark-themed HTML dashboard (`link_report.html`)
 - a CSV export (`link_report.csv`)
+- an optional PDF export (`--pdf`, prints the HTML report via headless Chromium)
 - a live console progress log + final summary
 
 `index.php` is a thin web wrapper over the same engine — it reuses the crawler and report builders directly (no duplicated logic), streams the progress log live to the browser, and embeds the finished report on the page.
@@ -30,7 +31,7 @@ php -S localhost:8090
 # then open http://localhost:8090
 ```
 
-Enter a URL, pick a few options (scan mode, max pages/depth, concurrency, asset/robots/TLS toggles, and an optional **Render JavaScript** toggle for SPAs), and hit **Scan**. You'll see a **live progress log** while it crawls, then the full report embedded on the page with **Open report** and **Download CSV** buttons. Reports are written to a local `reports/` folder (git-ignored).
+Enter a URL, pick a few options (scan mode, max pages/depth, concurrency, asset/robots/TLS toggles, and an optional **Render JavaScript** toggle for SPAs), and hit **Scan**. You'll see a **live progress log** while it crawls, then the full report embedded on the page with **Open report**, **Download CSV**, and (when the render engine is set up) **Download PDF** buttons. Reports are written to a local `reports/` folder (git-ignored).
 
 > Run the UI **locally only** — it fetches whatever URL you type, so don't expose it on a public host without adding your own authentication.
 
@@ -89,6 +90,7 @@ The core scan needs no Node, no Composer, and no external services — Node is o
 | `--user-agent` | *(built-in)* | Override the crawler User-Agent string |
 | `--output` | `link_report.html` | HTML report path |
 | `--csv` | `link_report.csv` | CSV export path |
+| `--pdf` | _(off)_ | Also export the report as PDF (needs the render engine: Node 18+ and `npx playwright install chromium`) |
 
 ## Report contents
 

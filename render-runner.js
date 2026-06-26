@@ -35,6 +35,9 @@
  *   node render-runner.js --input urls.json --concurrency 3 \
  *        --wait 4000 --timeout 20000 \
  *        --user-agent "BrokenLinkBulkScanner/1.0" [--ignore-tls]
+ *
+ *   # PDF mode — print a local HTML report to PDF and exit:
+ *   node render-runner.js --pdf-from report.html --pdf-out report.pdf
  */
 
 'use strict';
@@ -66,6 +69,8 @@ function parseArgs(argv) {
     timeout: 0,         // navigation timeout in ms (0 = derive from wait)
     userAgent: 'BrokenLinkBulkScanner/1.0 (+render)',
     ignoreTls: false,
+    pdfFrom: null,      // local HTML file to print to PDF
+    pdfOut: null,       // PDF output path (paired with pdfFrom)
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -76,6 +81,8 @@ function parseArgs(argv) {
     else if (a === '--timeout') out.timeout = Math.max(0, parseInt(next(), 10) || 0);
     else if (a === '--user-agent') out.userAgent = next();
     else if (a === '--ignore-tls') out.ignoreTls = true;
+    else if (a === '--pdf-from') out.pdfFrom = next();
+    else if (a === '--pdf-out') out.pdfOut = next();
   }
   // Navigation budget: explicit --timeout, else the settle time plus headroom.
   if (out.timeout === 0) out.timeout = out.wait + 15000;
@@ -163,6 +170,32 @@ async function renderUrl(browser, urlObj, opts) {
       finalUrl: page.url(),
       error: (err && err.message ? err.message : String(err)).split('\n')[0].slice(0, 200),
     };
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
+// ─── HTML-report → PDF ─────────────────────────────────────────────────────────
+/**
+ * Print a local, self-contained HTML report to PDF. The report's CSS is inline
+ * so a file:// load renders identically to the browser; printBackground keeps
+ * the report's theme. Used for the "Download PDF" export.
+ */
+async function renderPdf(browser, opts) {
+  const fromAbs = path.resolve(opts.pdfFrom);
+  if (!fs.existsSync(fromAbs)) throw new Error(`HTML file not found: ${fromAbs}`);
+
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  try {
+    await page.goto('file://' + fromAbs, { waitUntil: 'networkidle', timeout: opts.timeout || 30000 });
+    await page.pdf({
+      path: opts.pdfOut,
+      printBackground: true,
+      format: 'A4',
+      margin: { top: '12mm', bottom: '14mm', left: '10mm', right: '10mm' },
+    });
+    process.stderr.write(`✓ PDF written → ${opts.pdfOut}\n`);
   } finally {
     await context.close().catch(() => {});
   }
@@ -267,6 +300,22 @@ async function launchBrowser() {
 // ─── Main ────────────────────────────────────────────────────────────────────
 (async () => {
   const opts = parseArgs(process.argv);
+
+  // PDF mode: print a local HTML report to PDF and exit. No URL input needed.
+  if (opts.pdfFrom) {
+    if (!opts.pdfOut) {
+      process.stderr.write('❌  --pdf-from requires --pdf-out.\n');
+      process.exit(2);
+    }
+    const browser = await launchBrowser();
+    try {
+      await renderPdf(browser, opts);
+    } finally {
+      await browser.close().catch(() => {});
+    }
+    return;
+  }
+
   const urls = readInput(opts.input);
 
   if (!urls.length) {

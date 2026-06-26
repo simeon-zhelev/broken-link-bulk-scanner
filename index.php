@@ -45,6 +45,7 @@ function web_args(array $r, string $htmlPath, string $csvPath): array {
         'user-agent'      => DEFAULT_UA,
         'output'          => $htmlPath,
         'csv'             => $csvPath,
+        'pdf'             => '',
     ];
 }
 
@@ -121,6 +122,7 @@ function e($s) { return htmlspecialchars((string)$s, ENT_QUOTES); }
                font-weight: 600; }
   .a-html { background: #2563eb; color: #fff; }
   .a-csv  { background: #334155; color: #e2e8f0; }
+  .a-pdf  { background: #b91c1c; color: #fff; }
   .a-new  { background: transparent; color: #93c5fd; border: 1px solid #334155; }
   iframe { width: 100%; height: 78vh; border: 1px solid #1e293b; border-radius: 12px;
            background: #0f172a; margin-top: 4px; }
@@ -237,6 +239,16 @@ function e($s) { return htmlspecialchars((string)$s, ENT_QUOTES); }
       file_put_contents($htmlPath, build_html($crawl, $agg, $args, date('Y-m-d H:i')));
       file_put_contents($csvPath,  build_csv($crawl));
 
+      // Export the report as PDF when the render engine is available. It's a
+      // best-effort extra — the button only appears if the PDF was produced.
+      $pdfRel = null;
+      if ($renderReady) {
+          $pdfPath = REPORTS_DIR . '/' . $id . '.pdf';
+          if (render_pdf($htmlPath, $pdfPath, $args)) {
+              $pdfRel = 'reports/' . $id . '.pdf';
+          }
+      }
+
       $broken   = (int)($agg['broken'] ?? 0);
       $total    = (int)($agg['totalLinks'] ?? 0);
       $headline = "Scan complete — {$broken} broken of {$total} links tested.";
@@ -245,6 +257,7 @@ function e($s) { return htmlspecialchars((string)$s, ENT_QUOTES); }
          . '<div class="actions">'
          . '<a class="a-html" href="' . e($htmlRel) . '" target="_blank">Open full report ↗</a>'
          . '<a class="a-csv" href="' . e($csvRel) . '" download>Download CSV</a>'
+         . ($pdfRel ? '<a class="a-pdf" href="' . e($pdfRel) . '" download>Download PDF</a>' : '')
          . '<a class="a-new" href="?">← New scan</a>'
          . '</div></div>';
       echo '<iframe src="' . e($htmlRel) . '" title="Broken link report"></iframe>';

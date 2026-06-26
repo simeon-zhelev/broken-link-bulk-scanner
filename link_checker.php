@@ -77,13 +77,14 @@ function parse_args(array $argv): array {
         'user-agent'      => DEFAULT_UA,
         'output'          => 'link_report.html',
         'csv'             => 'link_report.csv',
+        'pdf'             => '',           // optional PDF export path (needs render engine)
     ];
 
     $opts = getopt('', [
         'url:', 'mode:', 'max-pages:', 'max-depth:', 'concurrency:', 'delay:', 'no-assets',
         'connect-timeout:', 'timeout:', 'max-redirs:', 'ignore-robots',
         'render', 'render-wait:', 'render-concurrency:', 'chrome-bin:', 'node:', 'runner:',
-        'insecure', 'user-agent:', 'output:', 'csv:', 'help',
+        'insecure', 'user-agent:', 'output:', 'csv:', 'pdf:', 'help',
     ]);
 
     if (isset($opts['help']) || empty($opts['url'])) {
@@ -120,6 +121,8 @@ Options:
   --user-agent=STR     Override the crawler User-Agent
   --output=FILE        HTML report path (default link_report.html)
   --csv=FILE           CSV export path  (default link_report.csv)
+  --pdf=FILE           Also export the report as PDF (needs the render engine:
+                       Node 18+ and `npx playwright install chromium`)
   --help               Show this help
 
 Examples:
@@ -152,6 +155,7 @@ HELP);
     $args['user-agent']      = isset($opts['user-agent']) ? (string)$opts['user-agent'] : $defaults['user-agent'];
     $args['output']          = isset($opts['output']) ? (string)$opts['output'] : $defaults['output'];
     $args['csv']             = isset($opts['csv']) ? (string)$opts['csv'] : $defaults['csv'];
+    $args['pdf']             = isset($opts['pdf']) ? (string)$opts['pdf'] : $defaults['pdf'];
 
     // Make sure the start URL has a scheme.
     if (!preg_match('#^https?://#i', $args['url'])) {
@@ -676,9 +680,69 @@ function render_pages(array $fetchJobs, array $args): array {
 }
 
 /**
+ * Print a finished HTML report to PDF by driving the Playwright Node runner in
+ * its --pdf mode. The HTML report is fully self-contained (inline CSS), so the
+ * browser renders it identically. Returns true on success; on any problem it
+ * prints a friendly note and returns false so the caller can carry on without
+ * a PDF (it's an optional export, never fatal). Needs the same Node/Playwright
+ * setup as render mode — checked via render_preflight_problem().
+ */
+function render_pdf(string $htmlPath, string $pdfPath, array $args): bool {
+    $problem = render_preflight_problem($args);
+    if ($problem !== null) {
+        echo "  ⚠ PDF export needs the render engine — skipped.\n"
+           . "     " . str_replace("\n", "\n     ", $problem) . "\n";
+        return false;
+    }
+    if (!is_file($htmlPath)) {
+        echo "  ⚠ PDF export skipped — HTML report not found at {$htmlPath}.\n";
+        return false;
+    }
+
+    $cmdParts = [
+        $args['node'], $args['runner'],
+        '--pdf-from', $htmlPath,
+        '--pdf-out', $pdfPath,
+    ];
+    $cmd = implode(' ', array_map('escapeshellarg', $cmdParts));
+
+    $env = null;
+    $chromeBin = trim((string)($args['chrome-bin'] ?? ''));
+    if ($chromeBin !== '') {
+        $env = getenv();
+        $env['RENDER_CHROME_PATH'] = $chromeBin;
+    }
+
+    $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+    $proc = @proc_open($cmd, $descriptors, $pipes, dirname($args['runner']), $env);
+    if (!is_resource($proc)) {
+        echo "  ⚠ could not launch the render runner for PDF export — skipped.\n";
+        return false;
+    }
+    fclose($pipes[0]);
+    // Pass the runner's progress through; drain stdout so the pipe can't fill.
+    stream_get_contents($pipes[1]);
+    $err = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $code = proc_close($proc);
+
+    if ($code !== 0 || !is_file($pdfPath)) {
+        $msg = trim($err) !== '' ? ' (' . trim(explode("\n", trim($err))[0]) . ')' : '';
+        echo "  ⚠ PDF export failed{$msg} — skipped.\n";
+        return false;
+    }
+    return true;
+}
+
+/**
  * Test a batch of links in parallel. Mirrors the single-link policy: try a
  * cheap HEAD for every URL first, then re-test with GET only those the server
- * rejected for HEAD (405/501/etc.), returned nothing for, or failed to reach.
+ * rejected or mis-answered for HEAD (400/403/404/405/406/501), returned nothing
+ * for, or failed to reach. The 404 retry matters because some endpoints don't
+ * implement HEAD and 404 it while serving the resource fine on GET (e.g. the
+ * Google Maps JS API) — so a 404 is always confirmed with a real GET before
+ * being reported broken.
  * Returns  url => result  with a 'method' field recording which one was used.
  */
 function checkLinks(array $urls, array $args): array {
@@ -695,7 +759,7 @@ function checkLinks(array $urls, array $args): array {
         $res = $head[$u];
         $needGet = $res['errno'] !== 0
             || $res['code'] === 0
-            || in_array($res['code'], [400, 403, 405, 406, 501], true);
+            || in_array($res['code'], [400, 403, 404, 405, 406, 501], true);
         if ($needGet) $getJobs[] = ['key' => $u, 'url' => $u, 'method' => 'GET'];
     }
     $get = $getJobs ? http_multi($getJobs, $args, $concurrency) : [];
@@ -760,6 +824,21 @@ function extractLinks(string $html, string $pageUrl, bool $checkAssets): array {
         foreach ($xp->query("//{$tag}[@{$attr}]") as $node) {
             if (!$node instanceof DOMElement) continue;
             $raw = trim($node->getAttribute($attr));
+
+            // Skip <link> connection/resource hints. Their href is a hostname or
+            // asset to warm up, not a navigable document: preconnect/dns-prefetch
+            // point at a bare CDN origin (fonts.googleapis.com/) that legitimately
+            // 404s, and preload/prefetch/modulepreload duplicate links fetched
+            // elsewhere. Testing them as links produces only false positives.
+            if ($type === 'link') {
+                $rel = strtolower(trim($node->getAttribute('rel')));
+                if ($rel !== '' && array_intersect(
+                        preg_split('/\s+/', $rel),
+                        ['preconnect', 'dns-prefetch', 'prefetch', 'preload', 'modulepreload']
+                    )) {
+                    continue;
+                }
+            }
 
             // Empty / placeholder anchors (href="", "#", "javascript:…") point
             // nowhere — flag them as dead/unfinished links instead of silently
@@ -1480,7 +1559,14 @@ function main(array $argv): void {
     file_put_contents($args['csv'], build_csv($crawl));
     echo "✅  CSV export  → {$args['csv']}\n";
 
-    // 5 — Console summary
+    // 5 — Optional PDF export
+    if (trim((string)$args['pdf']) !== '') {
+        if (render_pdf($args['output'], $args['pdf'], $args)) {
+            echo "✅  PDF export  → {$args['pdf']}\n";
+        }
+    }
+
+    // 6 — Console summary
     print_summary($crawl, $agg);
 }
 
