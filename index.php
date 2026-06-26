@@ -260,7 +260,18 @@ function e($s) { return htmlspecialchars((string)$s, ENT_QUOTES); }
          . ($pdfRel ? '<a class="a-pdf" href="' . e($pdfRel) . '" download>Download PDF</a>' : '')
          . '<a class="a-new" href="?">← New scan</a>'
          . '</div></div>';
-      echo '<iframe src="' . e($htmlRel) . '" title="Broken link report"></iframe>';
+      // Defer loading the embedded report until the page has fully finished
+      // loading. The crawl response is streamed, so the browser would otherwise
+      // request the iframe mid-stream — and the single-threaded PHP dev server
+      // (php -S) serializes requests, so that request blocks behind the still-
+      // open crawl connection and the browser eventually shows a broken-frame
+      // icon (worse the bigger the site / report). Setting src on window.load,
+      // when the connection is closed and the worker is free, avoids the race.
+      echo '<iframe data-src="' . e($htmlRel) . '" title="Broken link report"></iframe>';
+      echo '<script>window.addEventListener("load",function(){'
+         . 'var f=document.querySelector("iframe[data-src]");'
+         . 'if(f){f.src=f.getAttribute("data-src");}'
+         . '});</script>';
   }
 
 endif; ?>
