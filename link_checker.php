@@ -1138,9 +1138,8 @@ function class_color(string $class): string {
 }
 
 function status_badge(array $r): string {
-    $c = class_color($r['class']);
     $code = $r['code'] > 0 ? (string)$r['code'] : 'ERR';
-    return "<span class=\"badge\" style=\"background:$c\">$code</span>";
+    return "<span class=\"badge badge-{$r['class']}\">$code</span>";
 }
 
 function short_url(string $url): string {
@@ -1150,32 +1149,32 @@ function short_url(string $url): string {
 function summary_cards(array $agg): string {
     $c = $agg['counts'];
     $cards = [
-        ['OK (2xx)',         $c['ok'],       class_color('ok')],
-        ['Redirect (3xx)',   $c['redirect'], class_color('redirect')],
-        ['Client (4xx)',     $c['client'],   class_color('client')],
-        ['Server (5xx)',     $c['server'],   class_color('server')],
-        ['Connection error', $c['conn'],     class_color('conn')],
-        ['Empty / placeholder', $c['placeholder'] ?? 0, class_color('placeholder')],
+        ['OK (2xx)',         $c['ok'],       'ok'],
+        ['Redirect (3xx)',   $c['redirect'], 'redirect'],
+        ['Client (4xx)',     $c['client'],   'client'],
+        ['Server (5xx)',     $c['server'],   'server'],
+        ['Connection error', $c['conn'],     'conn'],
+        ['Empty / placeholder', $c['placeholder'] ?? 0, 'placeholder'],
     ];
     $html = '';
-    foreach ($cards as [$label, $n, $color]) {
+    foreach ($cards as [$label, $n, $slug]) {
         $html .= <<<CARD
 
       <div class="card">
         <div class="card-label">$label</div>
-        <div class="card-score" style="color:$color">$n</div>
+        <div class="card-score tc-$slug">$n</div>
         <div class="card-sub">links</div>
       </div>
 CARD;
     }
     $broken = $agg['broken'];
-    $brokenColor = $broken === 0 ? '#22c55e' : '#f87171';
+    $brokenClass = $broken === 0 ? 'tc-ok' : 'tc-broken';
     $total = $agg['totalLinks'];
     return <<<HTML
 <div class="section-title">🔗 Links by Status</div>
 <div class="cards">$html</div>
 <div class="stats">
-  <span><strong style="color:$brokenColor">$broken</strong> / $total broken links</span>
+  <span><strong class="$brokenClass">$broken</strong> / $total broken links</span>
   <span><strong>{$agg['internal']}</strong> internal</span>
   <span><strong>{$agg['external']}</strong> external</span>
 </div>
@@ -1189,13 +1188,12 @@ function broken_table(array $crawl): string {
     foreach ($crawl['results'] as $r) {
         if (!is_broken($r['class'])) continue;
         $i++;
-        $color = class_color($r['class']);
         $extra = $r['error'] !== '' ? htmlspecialchars(mb_substr($r['error'], 0, 120))
                                     : ($r['final'] !== $r['url'] ? 'final: ' . short_url($r['final']) : '');
         $rows .= "<tr>"
                . "<td class=\"num\">$i</td>"
                . "<td>" . status_badge($r) . "</td>"
-               . "<td><span style=\"color:$color;font-weight:600\">{$r['label']}</span></td>"
+               . "<td><span class=\"cls tc-{$r['class']}\">{$r['label']}</span></td>"
                . "<td class=\"url-cell\"><a href=\"" . htmlspecialchars($r['url']) . "\" target=\"_blank\" rel=\"noopener\">" . short_url($r['url']) . "</a></td>"
                . "<td class=\"ttype\">{$r['type']}</td>"
                . "<td class=\"url-cell\"><a href=\"" . htmlspecialchars($r['source']) . "\" target=\"_blank\" rel=\"noopener\">" . short_url($r['source']) . "</a></td>"
@@ -1204,7 +1202,7 @@ function broken_table(array $crawl): string {
     }
     if ($rows === '') {
         return '<div class="section-title">🚦 Broken Links</div>'
-             . '<p style="color:#22c55e;font-size:0.9rem">No broken links found. Every tested link returned a 2xx or a successful redirect.</p>';
+             . '<p class="tc-ok" style="font-size:0.9rem">No broken links found. Every tested link returned a 2xx or a successful redirect.</p>';
     }
     return <<<HTML
 
@@ -1227,7 +1225,6 @@ function placeholder_table(array $crawl): string {
     foreach ($crawl['results'] as $r) {
         if ($r['class'] !== 'placeholder') continue;
         $i++;
-        $color = class_color('placeholder');
         // Prefer the full element markup (<a href="#" id="tab1">…</a>) for
         // context; fall back to the bare href for older reports without it.
         $href  = !empty($r['element'])
@@ -1237,7 +1234,7 @@ function placeholder_table(array $crawl): string {
         $rows .= "<tr>"
                . "<td class=\"num\">$i</td>"
                . "<td class=\"ttype\">$href</td>"
-               . "<td><span style=\"color:$color;font-weight:600\">" . htmlspecialchars($r['label']) . "</span></td>"
+               . "<td><span class=\"cls tc-placeholder\">" . htmlspecialchars($r['label']) . "</span></td>"
                . "<td class=\"note\" style=\"max-width:320px\">$text</td>"
                . "<td class=\"url-cell\"><a href=\"" . htmlspecialchars($r['source']) . "\" target=\"_blank\" rel=\"noopener\">" . short_url($r['source']) . "</a></td>"
                . "</tr>";
@@ -1264,9 +1261,8 @@ function code_breakdown(array $agg): string {
         $isErr = $code === 'ERR';
         $num = $isErr ? 0 : (int)$code;
         [$cls] = $isErr ? ['conn'] : classify($num, 0);
-        $color = class_color($cls);
-        $rows .= "<tr><td><span class=\"badge\" style=\"background:$color\">$code</span></td>"
-               . "<td style=\"text-align:left;color:$color;font-weight:600\">" . ($isErr ? 'Connection error' : classify($num,0)[1]) . "</td>"
+        $rows .= "<tr><td><span class=\"badge badge-$cls\">$code</span></td>"
+               . "<td class=\"cls tc-$cls\" style=\"text-align:left\">" . ($isErr ? 'Connection error' : classify($num,0)[1]) . "</td>"
                . "<td>$n</td></tr>";
     }
     return <<<HTML
@@ -1287,7 +1283,6 @@ function full_table(array $crawl): string {
     $i = 0;
     foreach ($crawl['results'] as $r) {
         $i++;
-        $color = class_color($r['class']);
         $redir = $r['redirects'] > 0 ? " <span class=\"mini\">↩{$r['redirects']}</span>" : '';
         $note  = $r['error'] !== '' ? htmlspecialchars(mb_substr($r['error'], 0, 100))
                                     : ($r['final'] !== $r['url'] ? '→ ' . short_url($r['final']) : '');
@@ -1295,7 +1290,7 @@ function full_table(array $crawl): string {
         $rows .= "<tr data-class=\"{$r['class']}\" data-broken=\"" . (is_broken($r['class']) ? '1' : '0') . "\">"
                . "<td class=\"num\">$i</td>"
                . "<td>" . status_badge($r) . "</td>"
-               . "<td><span style=\"color:$color;font-weight:600\">{$r['label']}</span>$redir</td>"
+               . "<td><span class=\"cls tc-{$r['class']}\">{$r['label']}</span>$redir</td>"
                . "<td class=\"url-cell\"><a href=\"" . htmlspecialchars($r['url']) . "\" target=\"_blank\" rel=\"noopener\">" . short_url($r['url']) . "</a></td>"
                . "<td class=\"ttype\">{$r['type']}</td>"
                . "<td class=\"scope\">$scope</td>"
@@ -1413,6 +1408,62 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
            background: #0f172a; color: #cbd5e1; padding: 1px 6px; border-radius: 6px; }
   .legend { margin-top: 22px; font-size: 0.72rem; color: #64748b; }
   .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+
+  /* Status palette (on-screen dark theme). Applied via classes so the print
+     stylesheet below can swap in higher-contrast colours for the light PDF. */
+  .cls { font-weight: 600; }
+  .tc-ok { color: #22c55e; }  .tc-redirect { color: #3b82f6; }
+  .tc-client { color: #f59e0b; }  .tc-server { color: #ef4444; }
+  .tc-conn { color: #a855f7; }  .tc-placeholder { color: #2dd4bf; }
+  .tc-broken { color: #f87171; }
+  .badge-ok { background: #22c55e; }  .badge-redirect { background: #3b82f6; }
+  .badge-client { background: #f59e0b; }  .badge-server { background: #ef4444; }
+  .badge-conn { background: #a855f7; }  .badge-placeholder { background: #2dd4bf; }
+
+  /* PDF / print: switch to a high-contrast LIGHT theme (dark ink on white reads
+     and prints far better than the on-screen dark theme), and fix layout for
+     paper — tables can't scroll, so let wide cells wrap instead of overflowing
+     off the page; repeat the header on each page; keep rows whole; and drop the
+     interactive filter buttons that do nothing in a static export. */
+  @media print {
+    body { background: #ffffff; color: #1e293b; padding: 0 6px; }
+    h1 { color: #0f172a; }
+    .meta { color: #475569; }
+    .section-title { color: #475569; }
+    .card { background: #f8fafc; border: 1px solid #e2e8f0; }
+    .card-label { color: #475569; }
+    .card-sub { color: #64748b; }
+    .stats { color: #475569; }
+    .table-wrap { overflow: visible; background: #ffffff; border: 1px solid #e2e8f0; }
+    table { color: #1e293b; }
+    th { background: #f1f5f9; color: #475569; }
+    th, td { border-bottom: 1px solid #e2e8f0; }
+    td.url-cell a { color: #1d4ed8; }
+    td.num { color: #94a3b8; }
+    td.ttype, td.scope { color: #475569; }
+    td.note { color: #475569; }
+    code { background: #f1f5f9; color: #0f172a; border: 1px solid #e2e8f0; }
+    .mini { background: #e2e8f0; color: #334155; }
+    .legend { color: #475569; }
+
+    /* Higher-contrast status colours for white paper (darker shades; ≥4.5:1). */
+    .tc-ok { color: #15803d; }  .tc-redirect { color: #1d4ed8; }
+    .tc-client { color: #b45309; }  .tc-server { color: #b91c1c; }
+    .tc-conn { color: #7e22ce; }  .tc-placeholder { color: #0f766e; }
+    .tc-broken { color: #b91c1c; }
+    .badge-ok { background: #15803d; }  .badge-redirect { background: #1d4ed8; }
+    .badge-client { background: #b45309; }  .badge-server { background: #b91c1c; }
+    .badge-conn { background: #7e22ce; }  .badge-placeholder { background: #0f766e; }
+
+    /* Layout for paper. */
+    .filters { display: none; }
+    td.url-cell, td.note { max-width: none; white-space: normal;
+                           overflow: visible; text-overflow: clip;
+                           word-break: break-word; }
+    code { white-space: normal; word-break: break-word; }
+    thead { display: table-header-group; }
+    tr { break-inside: avoid; }
+  }
 </style>
 </head>
 <body>
@@ -1437,12 +1488,12 @@ $codes
 $full
 
 <div class="legend">
-  <span class="dot" style="background:#22c55e"></span> OK &nbsp;
-  <span class="dot" style="background:#3b82f6"></span> Redirect &nbsp;
-  <span class="dot" style="background:#f59e0b"></span> Client error (4xx) &nbsp;
-  <span class="dot" style="background:#ef4444"></span> Server error (5xx) &nbsp;
-  <span class="dot" style="background:#a855f7"></span> Connection error &nbsp;
-  <span class="dot" style="background:#2dd4bf"></span> Empty / placeholder link
+  <span class="dot badge-ok"></span> OK &nbsp;
+  <span class="dot badge-redirect"></span> Redirect &nbsp;
+  <span class="dot badge-client"></span> Client error (4xx) &nbsp;
+  <span class="dot badge-server"></span> Server error (5xx) &nbsp;
+  <span class="dot badge-conn"></span> Connection error &nbsp;
+  <span class="dot badge-placeholder"></span> Empty / placeholder link
 </div>
 
 <script>

@@ -193,7 +193,8 @@ async function renderPdf(browser, opts) {
       path: opts.pdfOut,
       printBackground: true,
       format: 'A4',
-      margin: { top: '12mm', bottom: '14mm', left: '10mm', right: '10mm' },
+      landscape: true,   // the report's link table is wide — landscape fits more columns
+      margin: { top: '10mm', bottom: '12mm', left: '8mm', right: '8mm' },
     });
     process.stderr.write(`✓ PDF written → ${opts.pdfOut}\n`);
   } finally {
