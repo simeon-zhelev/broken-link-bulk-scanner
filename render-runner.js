@@ -189,6 +189,9 @@ async function renderPdf(browser, opts) {
   const page = await context.newPage();
   try {
     await page.goto('file://' + fromAbs, { waitUntil: 'networkidle', timeout: opts.timeout || 30000 });
+    // Expand every "N pages" disclosure so the grouped page lists print in full
+    // (page.pdf() doesn't reliably fire the report's own beforeprint handler).
+    await page.evaluate(() => document.querySelectorAll('details').forEach(d => { d.open = true; }));
     await page.pdf({
       path: opts.pdfOut,
       printBackground: true,

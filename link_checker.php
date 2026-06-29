@@ -1013,7 +1013,10 @@ function crawl(array $args): array {
                 // directly (no HTTP test), keyed per page + reason + anchor
                 // text so distinct dead links on the same page are each shown.
                 if (!empty($lnk['placeholder'])) {
-                    $key = 'placeholder|' . $pageUrl . '|' . $lnk['reasonKey'] . '|' . $lnk['text'];
+                    // Key by the link's identity (reason + text), NOT the page,
+                    // so the same placeholder repeated site-wide collapses into
+                    // one grouped row that lists every page it appears on.
+                    $key = 'placeholder|' . $lnk['reasonKey'] . '|' . $lnk['text'];
                     if (!isset($tested[$key])) {
                         $tested[$key] = [
                             'url'       => $lnk['url'],
@@ -1026,16 +1029,25 @@ function crawl(array $args): array {
                             'redirects' => 0,
                             'type'      => 'a',
                             'source'    => $pageUrl,
+                            'sources'   => [],
                             'error'     => $lnk['text'] !== '' ? 'text: "' . $lnk['text'] . '"' : '(no link text)',
                             'internal'  => true,
                         ];
                     }
+                    $tested[$key]['sources'][$pageUrl] = true;   // set: unique pages
                     continue;
                 }
 
+                // Record every page a link appears on (a set keyed by page URL),
+                // so identical links found across the site become one row with a
+                // "found on N pages" count instead of repeating per page.
                 $u = $lnk['url'];
-                if (!isset($tested[$u]) && !isset($newLinks[$u])) {
-                    $newLinks[$u] = ['type' => $lnk['type'], 'source' => $pageUrl];
+                if (isset($tested[$u])) {
+                    $tested[$u]['sources'][$pageUrl] = true;       // tested earlier, seen again
+                } elseif (isset($newLinks[$u])) {
+                    $newLinks[$u]['sources'][$pageUrl] = true;
+                } else {
+                    $newLinks[$u] = ['type' => $lnk['type'], 'sources' => [$pageUrl => true]];
                 }
                 // In site mode, queue internal <a> targets for the next level.
                 if ($args['mode'] === 'site'
@@ -1068,7 +1080,8 @@ function crawl(array $args): array {
                     'method'    => $chk['method'],
                     'redirects' => $chk['redirects'],
                     'type'      => $meta['type'],
-                    'source'    => $meta['source'],
+                    'source'    => array_key_first($meta['sources']),
+                    'sources'   => $meta['sources'],
                     'error'     => $chk['error'],
                     'internal'  => sameHost($u, $startHost),
                 ];
@@ -1078,6 +1091,14 @@ function crawl(array $args): array {
 
         $level = $nextLevel;
         $depth++;
+    }
+
+    // Collapse each issue's page-set into an ordered list + count for the report.
+    foreach ($tested as $k => $r) {
+        $pages = isset($r['sources']) ? array_keys($r['sources']) : [$r['source']];
+        $tested[$k]['pages']     = $pages;
+        $tested[$k]['pageCount'] = count($pages);
+        unset($tested[$k]['sources']);
     }
 
     return [
@@ -1146,6 +1167,27 @@ function short_url(string $url): string {
     return htmlspecialchars(preg_replace('#^https?://#', '', $url));
 }
 
+/**
+ * Render the "Found on page" cell. A link found on a single page shows that
+ * page; one found on many collapses into a "<n> pages" disclosure listing them
+ * all (capped, with the full set always in the CSV). This is what groups the
+ * otherwise-repetitive per-page rows into one entry per unique issue.
+ */
+function sources_cell(array $r): string {
+    $pages = !empty($r['pages']) ? $r['pages'] : [$r['source']];
+    $n = count($pages);
+    $link = fn(string $p): string =>
+        '<a href="' . htmlspecialchars($p) . '" target="_blank" rel="noopener">' . short_url($p) . '</a>';
+    if ($n <= 1) return $link($pages[0]);
+
+    $cap = 30;
+    $items = '';
+    foreach (array_slice($pages, 0, $cap) as $p) $items .= $link($p) . '<br>';
+    if ($n > $cap) $items .= '<span class="more">…and ' . ($n - $cap) . ' more (see CSV)</span>';
+    return '<details class="pages"><summary>' . $n . ' pages</summary>'
+         . '<div class="pagelist">' . $items . '</div></details>';
+}
+
 function summary_cards(array $agg): string {
     $c = $agg['counts'];
     $cards = [
@@ -1181,43 +1223,6 @@ CARD;
 HTML;
 }
 
-/** The headline section: only broken links (4xx / 5xx / connection). */
-function broken_table(array $crawl): string {
-    $rows = '';
-    $i = 0;
-    foreach ($crawl['results'] as $r) {
-        if (!is_broken($r['class'])) continue;
-        $i++;
-        $extra = $r['error'] !== '' ? htmlspecialchars(mb_substr($r['error'], 0, 120))
-                                    : ($r['final'] !== $r['url'] ? 'final: ' . short_url($r['final']) : '');
-        $rows .= "<tr>"
-               . "<td class=\"num\">$i</td>"
-               . "<td>" . status_badge($r) . "</td>"
-               . "<td><span class=\"cls tc-{$r['class']}\">{$r['label']}</span></td>"
-               . "<td class=\"url-cell\"><a href=\"" . htmlspecialchars($r['url']) . "\" target=\"_blank\" rel=\"noopener\">" . short_url($r['url']) . "</a></td>"
-               . "<td class=\"ttype\">{$r['type']}</td>"
-               . "<td class=\"url-cell\"><a href=\"" . htmlspecialchars($r['source']) . "\" target=\"_blank\" rel=\"noopener\">" . short_url($r['source']) . "</a></td>"
-               . "<td class=\"note\">" . $extra . "</td>"
-               . "</tr>";
-    }
-    if ($rows === '') {
-        return '<div class="section-title">🚦 Broken Links</div>'
-             . '<p class="tc-ok" style="font-size:0.9rem">No broken links found. Every tested link returned a 2xx or a successful redirect.</p>';
-    }
-    return <<<HTML
-
-<div class="section-title">🚦 Broken Links</div>
-<div class="table-wrap" style="margin-top:10px">
-  <table>
-    <thead><tr><th>#</th><th>Status</th><th style="text-align:left">Class</th>
-      <th style="text-align:left">Broken link</th><th>Type</th>
-      <th style="text-align:left">Found on page</th><th style="text-align:left">Note</th></tr></thead>
-    <tbody>$rows</tbody>
-  </table>
-</div>
-HTML;
-}
-
 /** Empty / placeholder links: <a href=""> / "#" / "javascript:…" that go nowhere. */
 function placeholder_table(array $crawl): string {
     $rows = '';
@@ -1236,7 +1241,7 @@ function placeholder_table(array $crawl): string {
                . "<td class=\"ttype\">$href</td>"
                . "<td><span class=\"cls tc-placeholder\">" . htmlspecialchars($r['label']) . "</span></td>"
                . "<td class=\"note\" style=\"max-width:320px\">$text</td>"
-               . "<td class=\"url-cell\"><a href=\"" . htmlspecialchars($r['source']) . "\" target=\"_blank\" rel=\"noopener\">" . short_url($r['source']) . "</a></td>"
+               . "<td class=\"url-cell\">" . sources_cell($r) . "</td>"
                . "</tr>";
     }
     if ($rows === '') return '';
@@ -1294,7 +1299,7 @@ function full_table(array $crawl): string {
                . "<td class=\"url-cell\"><a href=\"" . htmlspecialchars($r['url']) . "\" target=\"_blank\" rel=\"noopener\">" . short_url($r['url']) . "</a></td>"
                . "<td class=\"ttype\">{$r['type']}</td>"
                . "<td class=\"scope\">$scope</td>"
-               . "<td class=\"url-cell\"><a href=\"" . htmlspecialchars($r['source']) . "\" target=\"_blank\" rel=\"noopener\">" . short_url($r['source']) . "</a></td>"
+               . "<td class=\"url-cell\">" . sources_cell($r) . "</td>"
                . "<td class=\"note\">$note</td>"
                . "</tr>";
     }
@@ -1302,14 +1307,14 @@ function full_table(array $crawl): string {
 
 <div class="section-title">📋 All Tested Links</div>
 <div class="filters">
-  <button class="fbtn active" data-filter="all">All</button>
+  <button class="fbtn" data-filter="all">All</button>
   <button class="fbtn" data-filter="broken">Broken only</button>
   <button class="fbtn" data-filter="ok">OK</button>
   <button class="fbtn" data-filter="redirect">Redirect</button>
   <button class="fbtn" data-filter="client">4xx</button>
   <button class="fbtn" data-filter="server">5xx</button>
   <button class="fbtn" data-filter="conn">Connection</button>
-  <button class="fbtn" data-filter="placeholder">Empty / placeholder</button>
+  <button class="fbtn active" data-filter="placeholder">Empty / placeholder</button>
 </div>
 <div class="table-wrap">
   <table id="all-links">
@@ -1322,33 +1327,11 @@ function full_table(array $crawl): string {
 HTML;
 }
 
-/** Pages that themselves failed to load during the crawl. */
-function page_errors_table(array $crawl): string {
-    if (!$crawl['pageErrors']) return '';
-    $rows = '';
-    foreach ($crawl['pageErrors'] as $url => $label) {
-        $rows .= "<tr><td class=\"url-cell\"><a href=\"" . htmlspecialchars($url) . "\" target=\"_blank\" rel=\"noopener\">" . short_url($url) . "</a></td>"
-               . "<td style=\"text-align:left;color:#fca5a5\">" . htmlspecialchars($label) . "</td></tr>";
-    }
-    return <<<HTML
-
-<div class="section-title">⚠ Pages That Failed To Load</div>
-<div class="table-wrap" style="margin-top:10px">
-  <table>
-    <thead><tr><th style="text-align:left">Page URL</th><th style="text-align:left">Problem</th></tr></thead>
-    <tbody>$rows</tbody>
-  </table>
-</div>
-HTML;
-}
-
 function build_html(array $crawl, array $agg, array $args, string $generatedAt): string {
     $cards   = summary_cards($agg);
-    $broken  = broken_table($crawl);
     $placeholders = placeholder_table($crawl);
     $codes   = code_breakdown($agg);
     $full    = full_table($crawl);
-    $perrs   = page_errors_table($crawl);
     $startEsc = htmlspecialchars($args['url']);
     $modeEsc  = $args['mode'] === 'site' ? 'Whole site' : 'Single page';
     $assetsEsc = $args['check-assets'] ? 'a, img, link, script' : 'a only';
@@ -1409,6 +1392,13 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
   .legend { margin-top: 22px; font-size: 0.72rem; color: #64748b; }
   .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px; vertical-align:middle; }
 
+  /* "Found on N pages" disclosure — collapses repeated per-page rows into one. */
+  details.pages > summary { cursor: pointer; color: #93c5fd; white-space: nowrap; }
+  details.pages .pagelist { margin-top: 5px; line-height: 1.6; }
+  details.pages .pagelist a { color: #93c5fd; text-decoration: none; }
+  details.pages .pagelist a:hover { text-decoration: underline; }
+  details.pages .more { color: #64748b; font-size: 0.7rem; }
+
   /* Status palette (on-screen dark theme). Applied via classes so the print
      stylesheet below can swap in higher-contrast colours for the light PDF. */
   .cls { font-weight: 600; }
@@ -1439,6 +1429,10 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
     th { background: #f1f5f9; color: #475569; }
     th, td { border-bottom: 1px solid #e2e8f0; }
     td.url-cell a { color: #1d4ed8; }
+    /* The page lists are force-opened for print via JS (beforeprint); just
+       recolour the disclosure and drop the now-pointless marker. */
+    details.pages > summary { color: #1d4ed8; font-weight: 600; list-style: none; }
+    details.pages .pagelist a { color: #1d4ed8; }
     td.num { color: #94a3b8; }
     td.ttype, td.scope { color: #475569; }
     td.note { color: #475569; }
@@ -1481,9 +1475,7 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
 </div>
 
 $cards
-$broken
 $placeholders
-$perrs
 $codes
 $full
 
@@ -1499,19 +1491,30 @@ $full
 <script>
   // Client-side filtering of the "All Tested Links" table.
   const rows = Array.from(document.querySelectorAll('#all-links tbody tr'));
+  function applyFilter(f) {
+    rows.forEach(tr => {
+      let show = true;
+      if (f === 'broken')      show = tr.dataset.broken === '1';
+      else if (f !== 'all')    show = tr.dataset.class === f;
+      tr.style.display = show ? '' : 'none';
+    });
+  }
   document.querySelectorAll('.fbtn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.fbtn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      const f = btn.dataset.filter;
-      rows.forEach(tr => {
-        let show = true;
-        if (f === 'broken')      show = tr.dataset.broken === '1';
-        else if (f !== 'all')    show = tr.dataset.class === f;
-        tr.style.display = show ? '' : 'none';
-      });
+      applyFilter(btn.dataset.filter);
     });
   });
+  // Default view: show the Empty / placeholder links (matches the active button).
+  applyFilter('placeholder');
+
+  // Expand every "N pages" disclosure when printing (incl. Save as PDF) so the
+  // full page list is visible on paper, then collapse again afterwards.
+  window.addEventListener('beforeprint', () =>
+    document.querySelectorAll('details.pages').forEach(d => d.open = true));
+  window.addEventListener('afterprint', () =>
+    document.querySelectorAll('details.pages').forEach(d => d.open = false));
 </script>
 </body>
 </html>
@@ -1526,14 +1529,20 @@ function build_csv(array $crawl): string {
     // source_page comes right after link_url so every row — especially "#"
     // placeholders, whose link_url/final_url are both just "#" — immediately
     // shows where the link was found instead of burying it in a late column.
-    $fields = ['link_url', 'source_page', 'status_code', 'classification', 'label', 'final_url',
+    // found_on_count + all_source_pages carry the full grouping so the exhaustive
+    // page list (capped in the HTML/PDF) is never lost in the data export.
+    $fields = ['link_url', 'source_page', 'found_on_count', 'all_source_pages',
+               'status_code', 'classification', 'label', 'final_url',
                'method', 'redirects', 'link_type', 'scope', 'error'];
     $fh = fopen('php://temp', 'r+');
     fputcsv($fh, $fields);
     foreach ($crawl['results'] as $r) {
+        $pages = !empty($r['pages']) ? $r['pages'] : [$r['source']];
         fputcsv($fh, [
             $r['url'],
             $r['source'],
+            count($pages),
+            implode(' ', $pages),
             $r['code'] > 0 ? $r['code'] : '0',
             $r['class'],
             $r['label'],
