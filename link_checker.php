@@ -1396,9 +1396,12 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
     /* Layout for paper. */
     .filters { display: none; }
     .card-link { cursor: default; }
-    /* The table filter is an on-screen interaction; a printed report should
-       list every tested link regardless of the active filter. */
+    /* The on-screen filter is interactive; the printed report instead lists
+       every tested link EXCEPT the passing OK (2xx) ones — a PDF is meant as an
+       actionable record of problems (redirects, 4xx/5xx, connection errors and
+       empty/placeholder links), not the clean results. */
     #all-links tbody tr { display: table-row !important; }
+    #all-links tbody tr[data-class="ok"] { display: none !important; }
     td.url-cell, td.note { max-width: none; white-space: normal;
                            overflow: visible; text-overflow: clip;
                            word-break: break-word; }
