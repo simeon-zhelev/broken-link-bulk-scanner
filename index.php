@@ -87,45 +87,47 @@ function e($s) { return htmlspecialchars((string)$s, ENT_QUOTES); }
 <title>Broken Link Bulk Scanner</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; }
-  body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a;
-         color: #e2e8f0; margin: 0; padding: 28px 28px 60px; }
-  h1   { font-size: 1.6rem; margin: 0 0 4px; color: #f8fafc; }
-  .sub { font-size: 0.85rem; color: #64748b; margin-bottom: 26px; line-height: 1.6; }
-  .panel { background: #1e293b; border-radius: 12px; padding: 22px 24px; max-width: 760px; }
-  label { display: block; font-size: 0.74rem; color: #94a3b8; text-transform: uppercase;
+  body { font-family: system-ui, -apple-system, sans-serif; background: #f8fafc;
+         color: #1e293b; margin: 0; padding: 28px 28px 60px; }
+  h1   { font-size: 1.6rem; margin: 0 0 4px; color: #0f172a; }
+  .sub { font-size: 0.85rem; color: #475569; margin-bottom: 26px; line-height: 1.6; }
+  .panel { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px;
+           padding: 22px 24px; max-width: 760px; }
+  label { display: block; font-size: 0.74rem; color: #475569; text-transform: uppercase;
           letter-spacing: .06em; margin-bottom: 6px; }
   input[type=text], input[type=number], select {
-    width: 100%; background: #0f172a; border: 1px solid #334155; color: #e2e8f0;
+    width: 100%; background: #ffffff; border: 1px solid #cbd5e1; color: #1e293b;
     border-radius: 8px; padding: 10px 12px; font-size: 0.9rem; }
   input:focus, select:focus { outline: none; border-color: #2563eb; }
   .row  { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 16px; }
   .row > div { flex: 1; min-width: 130px; }
   .checks { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 18px; }
-  .check { display: flex; align-items: center; gap: 8px; font-size: 0.82rem; color: #cbd5e1; }
+  .check { display: flex; align-items: center; gap: 8px; font-size: 0.82rem; color: #334155; }
   .check input { width: 16px; height: 16px; accent-color: #2563eb; }
   .check label { display: inline; margin: 0; text-transform: none; letter-spacing: 0;
-                 font-size: 0.82rem; color: #cbd5e1; }
+                 font-size: 0.82rem; color: #334155; }
   button.go { margin-top: 22px; background: #2563eb; color: #fff; border: none; cursor: pointer;
               border-radius: 8px; padding: 12px 26px; font-size: 0.95rem; font-weight: 600; }
   button.go:hover { background: #1d4ed8; }
-  details summary { cursor: pointer; color: #94a3b8; font-size: 0.8rem; margin-top: 20px; }
-  .err { background: #7f1d1d; color: #fecaca; padding: 12px 16px; border-radius: 8px;
-         margin-bottom: 20px; max-width: 760px; }
-  .log { background: #020617; border: 1px solid #1e293b; border-radius: 10px; padding: 16px;
-         font-family: ui-monospace, monospace; font-size: 0.78rem; color: #cbd5e1;
+  details summary { cursor: pointer; color: #475569; font-size: 0.8rem; margin-top: 20px; }
+  .err { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; padding: 12px 16px;
+         border-radius: 8px; margin-bottom: 20px; max-width: 760px; }
+  .log { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px;
+         font-family: ui-monospace, monospace; font-size: 0.78rem; color: #334155;
          white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow-y: auto;
          margin: 0 0 18px; }
-  .result { background: #1e293b; border-radius: 12px; padding: 20px 24px; margin-bottom: 18px; }
-  .result h2 { margin: 0 0 12px; font-size: 1.1rem; color: #f8fafc; }
+  .result { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px;
+            padding: 20px 24px; margin-bottom: 18px; }
+  .result h2 { margin: 0 0 12px; font-size: 1.1rem; color: #0f172a; }
   .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; }
   .actions a { text-decoration: none; border-radius: 8px; padding: 9px 18px; font-size: 0.85rem;
                font-weight: 600; }
   .a-html { background: #2563eb; color: #fff; }
-  .a-csv  { background: #334155; color: #e2e8f0; }
+  .a-csv  { background: #e2e8f0; color: #1e293b; }
   .a-pdf  { background: #b91c1c; color: #fff; }
-  .a-new  { background: transparent; color: #93c5fd; border: 1px solid #334155; }
-  iframe { width: 100%; height: 78vh; border: 1px solid #1e293b; border-radius: 12px;
-           background: #0f172a; margin-top: 4px; }
+  .a-new  { background: transparent; color: #2563eb; border: 1px solid #cbd5e1; }
+  iframe { width: 100%; height: 78vh; border: 1px solid #e2e8f0; border-radius: 12px;
+           background: #ffffff; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -180,7 +182,7 @@ function e($s) { return htmlspecialchars((string)$s, ENT_QUOTES); }
       <?php if ($renderReady): ?>
         <span style="color:#64748b">— slower, but finds links built by JS (SPAs)</span>
       <?php else: ?>
-        <span style="color:#f59e0b">— setup needed, so this is unavailable (run <code>npm install &amp;&amp; npx playwright install chromium</code>)</span>
+        <span style="color:#b45309">— setup needed, so this is unavailable (run <code>npm install &amp;&amp; npx playwright install chromium</code>)</span>
       <?php endif; ?>
     </label>
   </div>
