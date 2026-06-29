@@ -1200,9 +1200,11 @@ function summary_cards(array $agg): string {
     ];
     $html = '';
     foreach ($cards as [$label, $n, $slug]) {
+        // Each card filters the All Tested Links table to its status on click.
         $html .= <<<CARD
 
-      <div class="card">
+      <div class="card card-link" data-filter="$slug" role="button" tabindex="0"
+           title="Show $label links in the table below">
         <div class="card-label">$label</div>
         <div class="card-score tc-$slug">$n</div>
         <div class="card-sub">links</div>
@@ -1219,65 +1221,6 @@ CARD;
   <span><strong class="$brokenClass">$broken</strong> / $total broken links</span>
   <span><strong>{$agg['internal']}</strong> internal</span>
   <span><strong>{$agg['external']}</strong> external</span>
-</div>
-HTML;
-}
-
-/** Empty / placeholder links: <a href=""> / "#" / "javascript:…" that go nowhere. */
-function placeholder_table(array $crawl): string {
-    $rows = '';
-    $i = 0;
-    foreach ($crawl['results'] as $r) {
-        if ($r['class'] !== 'placeholder') continue;
-        $i++;
-        // Prefer the full element markup (<a href="#" id="tab1">…</a>) for
-        // context; fall back to the bare href for older reports without it.
-        $href  = !empty($r['element'])
-            ? '<code>' . htmlspecialchars($r['element']) . '</code>'
-            : '<code>href="' . htmlspecialchars($r['url'] === '(empty href)' ? '' : $r['url']) . '"</code>';
-        $text  = $r['error'] !== '' ? htmlspecialchars($r['error']) : '—';
-        $rows .= "<tr>"
-               . "<td class=\"num\">$i</td>"
-               . "<td class=\"ttype\">$href</td>"
-               . "<td><span class=\"cls tc-placeholder\">" . htmlspecialchars($r['label']) . "</span></td>"
-               . "<td class=\"note\" style=\"max-width:320px\">$text</td>"
-               . "<td class=\"url-cell\">" . sources_cell($r) . "</td>"
-               . "</tr>";
-    }
-    if ($rows === '') return '';
-    return <<<HTML
-
-<div class="section-title">🔗 Empty / Placeholder Links</div>
-<div class="table-wrap" style="margin-top:10px">
-  <table>
-    <thead><tr><th>#</th><th style="text-align:left">Element</th><th style="text-align:left">Reason</th>
-      <th style="text-align:left">Link text</th><th style="text-align:left">Found on page</th></tr></thead>
-    <tbody>$rows</tbody>
-  </table>
-</div>
-HTML;
-}
-
-/** Status-code breakdown table. */
-function code_breakdown(array $agg): string {
-    if (!$agg['byCode']) return '';
-    $rows = '';
-    foreach ($agg['byCode'] as $code => $n) {
-        $isErr = $code === 'ERR';
-        $num = $isErr ? 0 : (int)$code;
-        [$cls] = $isErr ? ['conn'] : classify($num, 0);
-        $rows .= "<tr><td><span class=\"badge badge-$cls\">$code</span></td>"
-               . "<td class=\"cls tc-$cls\" style=\"text-align:left\">" . ($isErr ? 'Connection error' : classify($num,0)[1]) . "</td>"
-               . "<td>$n</td></tr>";
-    }
-    return <<<HTML
-
-<div class="section-title">📊 By Status Code</div>
-<div class="table-wrap" style="margin-top:10px;max-width:420px">
-  <table>
-    <thead><tr><th>Code</th><th style="text-align:left">Meaning</th><th>Links</th></tr></thead>
-    <tbody>$rows</tbody>
-  </table>
 </div>
 HTML;
 }
@@ -1329,8 +1272,6 @@ HTML;
 
 function build_html(array $crawl, array $agg, array $args, string $generatedAt): string {
     $cards   = summary_cards($agg);
-    $placeholders = placeholder_table($crawl);
-    $codes   = code_breakdown($agg);
     $full    = full_table($crawl);
     $startEsc = htmlspecialchars($args['url']);
     $modeEsc  = $args['mode'] === 'site' ? 'Whole site' : 'Single page';
@@ -1358,6 +1299,9 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
                    text-transform: uppercase; letter-spacing: .1em; margin: 32px 0 10px; }
   .cards { display: flex; flex-wrap: wrap; gap: 12px; }
   .card  { background: #1e293b; border-radius: 10px; padding: 16px 22px; min-width: 148px; flex: 1; }
+  .card-link { cursor: pointer; transition: background .12s, transform .12s; border: 1px solid transparent; }
+  .card-link:hover { background: #263045; border-color: #334155; transform: translateY(-1px); }
+  .card-link:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
   .card-label { font-size: 0.72rem; color: #94a3b8; text-transform: uppercase; letter-spacing: .06em; }
   .card-score { font-size: 2.4rem; font-weight: 700; line-height: 1.1; margin: 4px 0; }
   .card-sub   { font-size: 0.7rem; color: #64748b; }
@@ -1451,6 +1395,10 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
 
     /* Layout for paper. */
     .filters { display: none; }
+    .card-link { cursor: default; }
+    /* The table filter is an on-screen interaction; a printed report should
+       list every tested link regardless of the active filter. */
+    #all-links tbody tr { display: table-row !important; }
     td.url-cell, td.note { max-width: none; white-space: normal;
                            overflow: visible; text-overflow: clip;
                            word-break: break-word; }
@@ -1475,8 +1423,6 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
 </div>
 
 $cards
-$placeholders
-$codes
 $full
 
 <div class="legend">
@@ -1499,15 +1445,29 @@ $full
       tr.style.display = show ? '' : 'none';
     });
   }
-  document.querySelectorAll('.fbtn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.fbtn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      applyFilter(btn.dataset.filter);
+  function setFilter(f) {
+    document.querySelectorAll('.fbtn').forEach(b => b.classList.toggle('active', b.dataset.filter === f));
+    applyFilter(f);
+  }
+  document.querySelectorAll('.fbtn').forEach(btn =>
+    btn.addEventListener('click', () => setFilter(btn.dataset.filter)));
+
+  // Clicking a "Links by Status" card filters the table to that status and
+  // scrolls down to it.
+  const table = document.getElementById('all-links');
+  document.querySelectorAll('.card[data-filter]').forEach(card => {
+    const go = () => {
+      setFilter(card.dataset.filter);
+      if (table) table.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    card.addEventListener('click', go);
+    card.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
     });
   });
+
   // Default view: show the Empty / placeholder links (matches the active button).
-  applyFilter('placeholder');
+  setFilter('placeholder');
 
   // Expand every "N pages" disclosure when printing (incl. Save as PDF) so the
   // full page list is visible on paper, then collapse again afterwards.
