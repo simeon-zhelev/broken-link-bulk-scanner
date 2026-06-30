@@ -88,51 +88,65 @@ function e($s) { return htmlspecialchars((string)$s, ENT_QUOTES); }
 <style>
   *, *::before, *::after { box-sizing: border-box; }
   body { font-family: system-ui, -apple-system, sans-serif; background: #f8fafc;
-         color: #1e293b; margin: 0; padding: 28px 28px 60px; }
-  h1   { font-size: 1.6rem; margin: 0 0 4px; color: #0f172a; }
-  .sub { font-size: 0.85rem; color: #475569; margin-bottom: 26px; line-height: 1.6; }
-  .panel { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px;
-           padding: 22px 24px; max-width: 760px; }
-  label { display: block; font-size: 0.74rem; color: #475569; text-transform: uppercase;
-          letter-spacing: .06em; margin-bottom: 6px; }
+         color: #1e293b; margin: 0; padding: 48px 24px 80px; }
+  .header { max-width: 720px; margin: 0 auto 36px; text-align: center; }
+  .badge { display: inline-block; background: #eef2ff; color: #4f46e5; font-size: 0.72rem;
+           font-weight: 400; letter-spacing: .1em; text-transform: uppercase;
+           padding: 7px 18px; border-radius: 999px; margin-bottom: 24px; }
+  h1   { font-size: 34px; font-weight: 700; letter-spacing: -0.02em;
+         margin: 0 0 16px; color: #0f172a; }
+  .sub { font-size: 16px; color: #475569; margin: 0; line-height: 1.65; }
+  .panel { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px;
+           padding: 32px 36px; max-width: 920px; margin: 0 auto;
+           box-shadow: 0 1px 3px rgba(15, 23, 42, .04); }
+  label { display: block; font-size: 0.9rem; font-weight: 700; color: #0f172a;
+          margin-bottom: 8px; }
+  label .hint { font-weight: 400; color: #64748b; }
   input[type=text], input[type=number], select {
     width: 100%; background: #ffffff; border: 1px solid #cbd5e1; color: #1e293b;
-    border-radius: 8px; padding: 10px 12px; font-size: 0.9rem; }
-  input:focus, select:focus { outline: none; border-color: #2563eb; }
-  .row  { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 16px; }
+    border-radius: 10px; padding: 12px 14px; font-size: 0.95rem; }
+  input:focus, select:focus { outline: none; border-color: #4f46e5;
+    box-shadow: 0 0 0 3px rgba(79, 70, 229, .12); }
+  .row  { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 20px; }
   .row > div { flex: 1; min-width: 130px; }
-  .checks { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 18px; }
-  .check { display: flex; align-items: center; gap: 8px; font-size: 0.82rem; color: #334155; }
-  .check input { width: 16px; height: 16px; accent-color: #2563eb; }
-  .check label { display: inline; margin: 0; text-transform: none; letter-spacing: 0;
-                 font-size: 0.82rem; color: #334155; }
-  button.go { margin-top: 22px; background: #2563eb; color: #fff; border: none; cursor: pointer;
-              border-radius: 8px; padding: 12px 26px; font-size: 0.95rem; font-weight: 600; }
-  button.go:hover { background: #1d4ed8; }
+  .checks { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 22px; }
+  .check { display: flex; align-items: center; gap: 9px; font-size: 0.9rem; color: #334155; }
+  .check input { width: 17px; height: 17px; accent-color: #4f46e5; }
+  .check label { display: inline; margin: 0; font-weight: 400; font-size: 0.9rem; color: #334155; }
+  button.go { margin-top: 26px; background: #4f46e5; color: #fff; border: none; cursor: pointer;
+              border-radius: 10px; padding: 13px 28px; font-size: 0.95rem; font-weight: 600; }
+  button.go:hover { background: #4338ca; }
+  .footer { max-width: 920px; margin: 28px auto 0; text-align: center;
+            font-size: 0.85rem; color: #64748b; }
   details summary { cursor: pointer; color: #475569; font-size: 0.8rem; margin-top: 20px; }
   .err { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; padding: 12px 16px;
-         border-radius: 8px; margin-bottom: 20px; max-width: 760px; }
+         border-radius: 8px; margin: 0 auto 20px; max-width: 920px; }
   .log { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px;
          font-family: ui-monospace, monospace; font-size: 0.78rem; color: #334155;
          white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow-y: auto;
-         margin: 0 0 18px; }
-  .result { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px;
-            padding: 20px 24px; margin-bottom: 18px; }
-  .result h2 { margin: 0 0 12px; font-size: 1.1rem; color: #0f172a; }
+         margin: 0 auto 18px; max-width: 920px; }
+  .result { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px;
+            padding: 24px 28px; margin: 0 auto 18px; max-width: 920px;
+            box-shadow: 0 1px 3px rgba(15, 23, 42, .04); }
+  .result h2 { margin: 0 0 12px; font-size: 1.15rem; color: #0f172a; }
   .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; }
-  .actions a { text-decoration: none; border-radius: 8px; padding: 9px 18px; font-size: 0.85rem;
+  .actions a { text-decoration: none; border-radius: 10px; padding: 10px 20px; font-size: 0.85rem;
                font-weight: 600; }
-  .a-html { background: #2563eb; color: #fff; }
+  .a-html { background: #4f46e5; color: #fff; }
   .a-csv  { background: #e2e8f0; color: #1e293b; }
   .a-pdf  { background: #b91c1c; color: #fff; }
-  .a-new  { background: transparent; color: #2563eb; border: 1px solid #cbd5e1; }
-  iframe { width: 100%; height: 78vh; border: 1px solid #e2e8f0; border-radius: 12px;
-           background: #ffffff; margin-top: 4px; }
+  .a-new  { background: transparent; color: #4f46e5; border: 1px solid #cbd5e1; }
+  iframe { width: 100%; height: 78vh; border: 1px solid #e2e8f0; border-radius: 16px;
+           background: #ffffff; margin: 4px auto 0; max-width: 920px; display: block; }
 </style>
 </head>
 <body>
-<h1>🔗 Broken Link Bulk Scanner</h1>
-<div class="sub">Enter a URL, crawl the site, and see every dead link in one dashboard.</div>
+<div class="header">
+  <div class="badge">HTTP Crawler · Link Checker</div>
+  <h1>Broken Link Bulk Scanner</h1>
+  <div class="sub">Enter a website address, crawl every page, and see every dead link, image,
+  and asset in one dashboard. Optionally render JavaScript to catch links built by SPAs.</div>
+</div>
 
 <?php if ($extError): ?>
   <div class="err"><?= e($extError) ?></div>
@@ -142,7 +156,7 @@ function e($s) { return htmlspecialchars((string)$s, ENT_QUOTES); }
 <form class="panel" method="get" action="">
   <input type="hidden" name="submitted" value="1">
   <div>
-    <label for="url">Website URL</label>
+    <label for="url">Website URL <span class="hint">— the page to start crawling from</span></label>
     <input type="text" id="url" name="url" placeholder="https://example.com" autofocus
            value="<?= e($val['url']) ?>" <?= $extError ? 'disabled' : '' ?>>
   </div>
@@ -156,7 +170,7 @@ function e($s) { return htmlspecialchars((string)$s, ENT_QUOTES); }
       </select>
     </div>
     <div>
-      <label for="max-pages">Max pages</label>
+      <label for="max-pages">Max pages <span class="hint">— crawl cap</span></label>
       <input type="number" id="max-pages" name="max-pages" min="1" max="2000" value="<?= e($val['max-pages']) ?>">
     </div>
     <div>
@@ -203,6 +217,7 @@ function e($s) { return htmlspecialchars((string)$s, ENT_QUOTES); }
 
   <button class="go" type="submit" <?= $extError ? 'disabled' : '' ?>>Scan for broken links →</button>
 </form>
+<div class="footer">Crawls with PHP cURL + DOM — no external API or key required.</div>
 
 <?php else: /* ---------- run the scan, stream progress ---------- */
 
