@@ -192,7 +192,12 @@ function canonicalize(string $url): string {
     if ($path === '' || $path[0] !== '/') $path = '/' . $path;
 
     $query = isset($p['query']) && $p['query'] !== '' ? '?' . $p['query'] : '';
-    return $scheme . '://' . $host . $port . $path . $query;
+    $url = $scheme . '://' . $host . $port . $path . $query;
+
+    // Percent-encode characters that are illegal in URLs the way browsers do
+    // (spaces, control bytes, non-ASCII). cURL otherwise rejects the URL
+    // ("Malformed input to a URL function") and a WORKING link reports as broken.
+    return preg_replace_callback('/[\x00-\x20\x7F-\xFF]/', fn ($m) => rawurlencode($m[0]), $url);
 }
 
 /**
