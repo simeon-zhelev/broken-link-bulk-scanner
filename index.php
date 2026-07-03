@@ -5,9 +5,9 @@
  * A thin web front-end over link_checker.php. Reuses the crawler + report
  * builders directly; nothing is duplicated. Run it with PHP's built-in server:
  *
- *     php -S localhost:8002
+ *     php -S localhost:8083
  *
- * then open http://localhost:8002 in a browser.
+ * then open http://localhost:8083 in a browser.
  *
  * NOTE: this fetches arbitrary URLs you type, so run it locally — do not expose
  * it on a public host without adding your own authentication.

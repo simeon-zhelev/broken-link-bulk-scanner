@@ -4,7 +4,7 @@ Crawl an entire website and surface every dead link — all in a self-contained 
 
 Use it either way:
 
-- **Browser UI** — `php -S localhost:8002`, open the page, type a URL, watch a live progress log, then read the report inline. ([jump to setup](#quick-start--web-ui))
+- **Browser UI** — `php -S localhost:8083`, open the page, type a URL, watch a live progress log, then read the report inline. ([jump to setup](#quick-start--web-ui))
 - **Command line** — `php link_checker.php --url=…` for scripting and cron. ([jump to setup](#quick-start--cli))
 
 Works with any site (WordPress, Shopify, static, …) — no API key, no account required. Everything runs locally via plain PHP + cURL.
@@ -27,8 +27,8 @@ With `--render`, each page is additionally loaded in **headless Chromium** (via 
 Prefer a browser? Start PHP's built-in server in the project directory and open the page:
 
 ```bash
-php -S localhost:8002
-# then open http://localhost:8002
+php -S localhost:8083
+# then open http://localhost:8083
 ```
 
 Enter a URL, pick a few options (scan mode, max pages/depth, concurrency, asset/robots/TLS toggles, and an optional **Render JavaScript** toggle for SPAs), and hit **Scan**. You'll see a **live progress log** while it crawls, then the full report embedded on the page with **Open report**, **Download CSV**, and (when the render engine is set up) **Download PDF** buttons. Reports are written to a local `reports/` folder (git-ignored).
@@ -124,7 +124,7 @@ Cron example — every Monday at 07:00:
 ```
 sitelinks-bulk-scanner/
 ├── link_checker.php   # crawler + report generator (run this from the CLI)
-├── index.php          # web UI — `php -S localhost:8002`, then open in a browser
+├── index.php          # web UI — `php -S localhost:8083`, then open in a browser
 ├── examples/          # sample HTML + CSV report (demo data, no real site)
 ├── README.md
 └── LICENSE            # MIT
