@@ -1153,13 +1153,13 @@ function aggregate(array $crawl): array {
 
 function class_color(string $class): string {
     switch ($class) {
-        case 'ok':       return '#22c55e';
-        case 'redirect': return '#3b82f6';
-        case 'client':   return '#f59e0b';
-        case 'server':   return '#ef4444';
+        case 'ok':       return '#2e9e5b';
+        case 'redirect': return '#2a78d6';
+        case 'client':   return '#d99a2b';
+        case 'server':   return '#cf4a3a';
         case 'conn':     return '#a855f7';
         case 'placeholder': return '#2dd4bf';
-        default:         return '#94a3b8';
+        default:         return '#9a958c';
     }
 }
 
@@ -1296,70 +1296,70 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
 <title>Broken Link Report — $generatedAt</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; }
-  body  { font-family: system-ui, -apple-system, sans-serif;
-          background: #ffffff; color: #1e293b; margin: 0; padding: 24px 28px; }
-  h1    { font-size: 1.6rem; margin-bottom: 4px; color: #0f172a; }
-  .meta { font-size: 0.8rem; color: #475569; margin-bottom: 22px; line-height: 1.6; }
-  .section-title { font-size: 0.8rem; font-weight: 700; color: #475569;
+  body  { font-family: Helvetica, Arial, system-ui, sans-serif;
+          background: #f7f5f1; color: #1a1a1a; margin: 0; padding: 24px 28px; }
+  h1    { font-size: 1.6rem; margin-bottom: 4px; color: #1a1a1a; }
+  .meta { font-size: 0.8rem; color: #777777; margin-bottom: 22px; line-height: 1.6; }
+  .section-title { font-size: 0.8rem; font-weight: 700; color: #777777;
                    text-transform: uppercase; letter-spacing: .1em; margin: 32px 0 10px; }
   .cards { display: flex; flex-wrap: wrap; gap: 12px; }
-  .card  { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px;
+  .card  { background: #f7f5f1; border: 1px solid #e3ded6; border-radius: 8px;
            padding: 16px 22px; min-width: 148px; flex: 1; }
   .card-link { cursor: pointer; transition: background .12s, transform .12s, border-color .12s; }
-  .card-link:hover { background: #f1f5f9; border-color: #cbd5e1; transform: translateY(-1px); }
-  .card-link:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
-  .card-label { font-size: 0.72rem; color: #475569; text-transform: uppercase; letter-spacing: .06em; }
+  .card-link:hover { background: #f0ede7; border-color: #cfc9bf; transform: translateY(-1px); }
+  .card-link:focus-visible { outline: 2px solid #2a78d6; outline-offset: 2px; }
+  .card-label { font-size: 0.72rem; color: #777777; text-transform: uppercase; letter-spacing: .06em; }
   .card-score { font-size: 2.4rem; font-weight: 700; line-height: 1.1; margin: 4px 0; }
-  .card-sub   { font-size: 0.7rem; color: #64748b; }
+  .card-sub   { font-size: 0.7rem; color: #888888; }
   .stats { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 12px;
-           font-size: 0.85rem; color: #475569; }
-  .table-wrap { overflow-x: auto; border-radius: 10px; background: #ffffff;
-                border: 1px solid #e2e8f0; margin-top: 4px; }
-  table  { width: 100%; border-collapse: collapse; font-size: 0.77rem; color: #1e293b; }
-  th, td { padding: 8px 10px; text-align: center; border-bottom: 1px solid #e2e8f0; }
-  th     { background: #f1f5f9; color: #475569; font-weight: 600;
+           font-size: 0.85rem; color: #777777; }
+  .table-wrap { overflow-x: auto; border-radius: 8px; background: #ffffff;
+                border: 1px solid #e3ded6; margin-top: 4px; }
+  table  { width: 100%; border-collapse: collapse; font-size: 0.77rem; color: #1a1a1a; }
+  th, td { padding: 8px 10px; text-align: center; border-bottom: 1px solid #e3ded6; }
+  th     { background: #f0ede7; color: #777777; font-weight: 600;
            text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
   td.url-cell { text-align: left; max-width: 360px; overflow: hidden;
                 text-overflow: ellipsis; white-space: nowrap; }
-  td.url-cell a { color: #1d4ed8; text-decoration: none; }
+  td.url-cell a { color: #2a78d6; text-decoration: none; }
   td.url-cell a:hover { text-decoration: underline; }
-  td.num   { color: #94a3b8; width: 32px; }
-  td.ttype { color: #475569; font-family: ui-monospace, monospace; font-size: 0.7rem; }
-  td.scope { color: #475569; font-size: 0.7rem; }
-  td.note  { text-align: left; color: #475569; font-size: 0.7rem;
+  td.num   { color: #9a958c; width: 32px; }
+  td.ttype { color: #777777; font-family: ui-monospace, monospace; font-size: 0.7rem; }
+  td.scope { color: #777777; font-size: 0.7rem; }
+  td.note  { text-align: left; color: #777777; font-size: 0.7rem;
              max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  tr:hover td { background: #f1f5f9; }
+  tr:hover td { background: #f0ede7; }
   .badge { display: inline-block; min-width: 34px; padding: 2px 8px; border-radius: 12px;
            color: #fff; font-weight: 700; font-size: 0.72rem; }
-  .mini  { display: inline-block; padding: 0 6px; border-radius: 10px; background: #e2e8f0;
-           color: #334155; font-size: 0.66rem; margin-left: 4px; }
+  .mini  { display: inline-block; padding: 0 6px; border-radius: 8px; background: #e3ded6;
+           color: #1a1a1a; font-size: 0.66rem; margin-left: 4px; }
   .filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
-  .fbtn  { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1;
+  .fbtn  { background: #f0ede7; color: #777777; border: 1px solid #cfc9bf;
            border-radius: 8px; padding: 5px 12px; font-size: 0.74rem; cursor: pointer; }
-  .fbtn:hover  { background: #e2e8f0; }
-  .fbtn.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .fbtn:hover  { background: #e3ded6; }
+  .fbtn.active { background: #2a78d6; color: #fff; border-color: #2a78d6; }
   code   { font-family: ui-monospace, monospace; font-size: 0.72rem;
-           background: #f1f5f9; color: #0f172a; border: 1px solid #e2e8f0;
+           background: #f0ede7; color: #1a1a1a; border: 1px solid #e3ded6;
            padding: 1px 6px; border-radius: 6px; }
-  .legend { margin-top: 22px; font-size: 0.72rem; color: #475569; }
+  .legend { margin-top: 22px; font-size: 0.72rem; color: #777777; }
   .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px; vertical-align:middle; }
 
   /* "Found on N pages" disclosure — collapses repeated per-page rows into one. */
-  details.pages > summary { cursor: pointer; color: #1d4ed8; white-space: nowrap; }
+  details.pages > summary { cursor: pointer; color: #2a78d6; white-space: nowrap; }
   details.pages .pagelist { margin-top: 5px; line-height: 1.6; }
-  details.pages .pagelist a { color: #1d4ed8; text-decoration: none; }
+  details.pages .pagelist a { color: #2a78d6; text-decoration: none; }
   details.pages .pagelist a:hover { text-decoration: underline; }
-  details.pages .more { color: #64748b; font-size: 0.7rem; }
+  details.pages .more { color: #888888; font-size: 0.7rem; }
 
   /* Status palette — high-contrast shades (≥4.5:1) for the light theme. Applied
      via classes so badges and class labels stay legible on white. */
   .cls { font-weight: 600; }
-  .tc-ok { color: #15803d; }  .tc-redirect { color: #1d4ed8; }
-  .tc-client { color: #b45309; }  .tc-server { color: #b91c1c; }
+  .tc-ok { color: #24824a; }  .tc-redirect { color: #2a78d6; }
+  .tc-client { color: #a9761b; }  .tc-server { color: #b23527; }
   .tc-conn { color: #7e22ce; }  .tc-placeholder { color: #0f766e; }
-  .tc-broken { color: #b91c1c; }
-  .badge-ok { background: #15803d; }  .badge-redirect { background: #1d4ed8; }
-  .badge-client { background: #b45309; }  .badge-server { background: #b91c1c; }
+  .tc-broken { color: #b23527; }
+  .badge-ok { background: #24824a; }  .badge-redirect { background: #2a78d6; }
+  .badge-client { background: #a9761b; }  .badge-server { background: #b23527; }
   .badge-conn { background: #7e22ce; }  .badge-placeholder { background: #0f766e; }
 
   /* PDF / print: the colours already match the light screen theme, so this only
