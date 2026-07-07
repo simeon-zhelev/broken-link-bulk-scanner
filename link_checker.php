@@ -1220,7 +1220,7 @@ CARD;
     $brokenClass = $broken === 0 ? 'tc-ok' : 'tc-broken';
     $total = $agg['totalLinks'];
     return <<<HTML
-<div class="section-title">🔗 Links by Status</div>
+<div class="section-title">Links by Status</div>
 <div class="cards">$html</div>
 <div class="stats">
   <span><strong class="$brokenClass">$broken</strong> / $total broken links</span>
@@ -1253,7 +1253,7 @@ function full_table(array $crawl): string {
     }
     return <<<HTML
 
-<div class="section-title">📋 All Tested Links</div>
+<div class="section-title">All Tested Links</div>
 <div class="filters">
   <button class="fbtn" data-filter="all">All</button>
   <button class="fbtn" data-filter="broken">Broken only</button>
@@ -1294,62 +1294,86 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Broken Link Report — $generatedAt</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
+  /* ── Website Health Check report theme (teal) ── */
+  :root {
+    --ink: #0F1E33; --body: #33415C; --muted: #64748B; --soft: #94A3B8;
+    --line: #E6EAF1; --line-strong: #C9D4E5; --bg: #ffffff; --bg-soft: #F5F7FA;
+    --accent: #0D8A7E; --accent-tint: #E6F4F2; --accent-line: #BFE3DE;
+    --good: #1F9D5B; --warn: #E3A11F; --bad: #D64541;
+  }
   *, *::before, *::after { box-sizing: border-box; }
-  body  { font-family: Helvetica, Arial, system-ui, sans-serif;
-          background: #f7f5f1; color: #1a1a1a; margin: 0; padding: 24px 28px; }
-  h1    { font-size: 1.6rem; margin-bottom: 4px; color: #1a1a1a; }
-  .meta { font-size: 0.8rem; color: #777777; margin-bottom: 22px; line-height: 1.6; }
-  .section-title { font-size: 0.8rem; font-weight: 700; color: #777777;
-                   text-transform: uppercase; letter-spacing: .1em; margin: 32px 0 10px; }
+  body  { font-family: 'IBM Plex Sans', system-ui, Helvetica, Arial, sans-serif;
+          background: var(--bg-soft); color: var(--body); margin: 0; padding: 0 28px 40px;
+          line-height: 1.55; }
+  .brandbar { display: flex; align-items: center; gap: 14px; padding: 18px 0 16px;
+              margin-bottom: 24px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .brandbar .logo { width: 30px; height: 30px; border-radius: 50%; flex: none;
+    background: conic-gradient(var(--good) 0 76%, var(--line) 76% 100%);
+    display: grid; place-items: center; }
+  .brandbar .logo::before { content: ''; width: 20px; height: 20px; border-radius: 50%;
+    background: var(--bg-soft); }
+  .brandbar .brandname { font-family: 'Space Grotesk', sans-serif; font-weight: 700;
+    font-size: 17px; color: var(--ink); }
+  .brandbar .brandctx { color: var(--soft); font-size: 13px; }
+  .brandbar .sp { flex: 1; }
+  h1    { font-family: 'Space Grotesk', sans-serif; font-size: 1.6rem; margin: 6px 0 4px; color: var(--ink); }
+  .meta { font-size: 0.8rem; color: var(--muted); margin-bottom: 22px; line-height: 1.6; }
+  .meta strong { color: var(--ink); }
+  .section-title { font-family: 'Space Grotesk', sans-serif; font-size: 0.8rem; font-weight: 700;
+                   color: var(--muted); text-transform: uppercase; letter-spacing: .1em; margin: 32px 0 10px; }
   .cards { display: flex; flex-wrap: wrap; gap: 12px; }
-  .card  { background: #f7f5f1; border: 1px solid #e3ded6; border-radius: 8px;
+  .card  { background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
            padding: 16px 22px; min-width: 148px; flex: 1; }
   .card-link { cursor: pointer; transition: background .12s, transform .12s, border-color .12s; }
-  .card-link:hover { background: #f0ede7; border-color: #cfc9bf; transform: translateY(-1px); }
-  .card-link:focus-visible { outline: 2px solid #2a78d6; outline-offset: 2px; }
-  .card-label { font-size: 0.72rem; color: #777777; text-transform: uppercase; letter-spacing: .06em; }
-  .card-score { font-size: 2.4rem; font-weight: 700; line-height: 1.1; margin: 4px 0; }
-  .card-sub   { font-size: 0.7rem; color: #888888; }
+  .card-link:hover { background: var(--accent-tint); border-color: var(--accent-line); transform: translateY(-1px); }
+  .card-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .card-label { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .card-score { font-family: 'Space Grotesk', sans-serif; font-size: 2.4rem; font-weight: 700;
+                line-height: 1.1; margin: 4px 0; color: var(--ink); }
+  .card-sub   { font-size: 0.7rem; color: var(--soft); }
   .stats { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 12px;
-           font-size: 0.85rem; color: #777777; }
-  .table-wrap { overflow-x: auto; border-radius: 8px; background: #ffffff;
-                border: 1px solid #e3ded6; margin-top: 4px; }
-  table  { width: 100%; border-collapse: collapse; font-size: 0.77rem; color: #1a1a1a; }
-  th, td { padding: 8px 10px; text-align: center; border-bottom: 1px solid #e3ded6; }
-  th     { background: #f0ede7; color: #777777; font-weight: 600;
+           font-size: 0.85rem; color: var(--muted); }
+  .table-wrap { overflow-x: auto; border-radius: 12px; background: var(--bg);
+                border: 1px solid var(--line); margin-top: 4px; }
+  table  { width: 100%; border-collapse: collapse; font-size: 0.77rem; color: var(--body); }
+  th, td { padding: 8px 10px; text-align: center; border-bottom: 1px solid var(--line); }
+  th     { background: var(--bg-soft); color: var(--muted); font-weight: 600;
            text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
   td.url-cell { text-align: left; max-width: 360px; overflow: hidden;
                 text-overflow: ellipsis; white-space: nowrap; }
-  td.url-cell a { color: #2a78d6; text-decoration: none; }
+  td.url-cell a { color: var(--accent); text-decoration: none; }
   td.url-cell a:hover { text-decoration: underline; }
-  td.num   { color: #9a958c; width: 32px; }
-  td.ttype { color: #777777; font-family: ui-monospace, monospace; font-size: 0.7rem; }
-  td.scope { color: #777777; font-size: 0.7rem; }
-  td.note  { text-align: left; color: #777777; font-size: 0.7rem;
+  td.num   { color: var(--soft); width: 32px; }
+  td.ttype { color: var(--muted); font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 0.7rem; }
+  td.scope { color: var(--muted); font-size: 0.7rem; }
+  td.note  { text-align: left; color: var(--muted); font-size: 0.7rem;
              max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  tr:hover td { background: #f0ede7; }
+  tr:hover td { background: var(--accent-tint); }
   .badge { display: inline-block; min-width: 34px; padding: 2px 8px; border-radius: 12px;
            color: #fff; font-weight: 700; font-size: 0.72rem; }
-  .mini  { display: inline-block; padding: 0 6px; border-radius: 8px; background: #e3ded6;
-           color: #1a1a1a; font-size: 0.66rem; margin-left: 4px; }
+  .mini  { display: inline-block; padding: 0 6px; border-radius: 8px; background: var(--bg-soft);
+           color: var(--ink); border: 1px solid var(--line); font-size: 0.66rem; margin-left: 4px; }
   .filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
-  .fbtn  { background: #f0ede7; color: #777777; border: 1px solid #cfc9bf;
+  .fbtn  { background: var(--bg); color: var(--muted); border: 1px solid var(--line-strong);
            border-radius: 8px; padding: 5px 12px; font-size: 0.74rem; cursor: pointer; }
-  .fbtn:hover  { background: #e3ded6; }
-  .fbtn.active { background: #2a78d6; color: #fff; border-color: #2a78d6; }
-  code   { font-family: ui-monospace, monospace; font-size: 0.72rem;
-           background: #f0ede7; color: #1a1a1a; border: 1px solid #e3ded6;
+  .fbtn:hover  { background: var(--accent-tint); border-color: var(--accent-line); }
+  .fbtn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  code   { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 0.72rem;
+           background: var(--bg-soft); color: var(--ink); border: 1px solid var(--line);
            padding: 1px 6px; border-radius: 6px; }
-  .legend { margin-top: 22px; font-size: 0.72rem; color: #777777; }
+  .legend { margin-top: 22px; font-size: 0.72rem; color: var(--muted); }
   .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px; vertical-align:middle; }
 
   /* "Found on N pages" disclosure — collapses repeated per-page rows into one. */
-  details.pages > summary { cursor: pointer; color: #2a78d6; white-space: nowrap; }
+  details.pages > summary { cursor: pointer; color: var(--accent); white-space: nowrap; }
   details.pages .pagelist { margin-top: 5px; line-height: 1.6; }
-  details.pages .pagelist a { color: #2a78d6; text-decoration: none; }
+  details.pages .pagelist a { color: var(--accent); text-decoration: none; }
   details.pages .pagelist a:hover { text-decoration: underline; }
-  details.pages .more { color: #888888; font-size: 0.7rem; }
+  details.pages .more { color: var(--soft); font-size: 0.7rem; }
 
   /* Status palette — high-contrast shades (≥4.5:1) for the light theme. Applied
      via classes so badges and class labels stay legible on white. */
@@ -1388,7 +1412,13 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
 </style>
 </head>
 <body>
-<h1>🔗 Broken Link Bulk Report</h1>
+<header class="brandbar">
+  <span class="logo"></span>
+  <span class="brandname">Website Health Check</span>
+  <span class="sp"></span>
+  <span class="brandctx">Broken-link report · powered by 2create</span>
+</header>
+<h1>Broken Link Bulk Report</h1>
 <div class="meta">
   Start URL: <strong>$startEsc</strong> &nbsp;|&nbsp;
   Mode: <strong>$modeEsc</strong> &nbsp;|&nbsp;
