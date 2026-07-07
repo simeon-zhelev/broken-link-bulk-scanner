@@ -1474,7 +1474,8 @@ function build_csv(array $crawl): string {
                'status_code', 'classification', 'label', 'final_url',
                'method', 'redirects', 'link_type', 'scope', 'error'];
     $fh = fopen('php://temp', 'r+');
-    fputcsv($fh, $fields);
+    // Explicit escape: PHP 8.4 deprecates omitting it (default is being removed).
+    fputcsv($fh, $fields, escape: '\\');
     foreach ($crawl['results'] as $r) {
         $pages = !empty($r['pages']) ? $r['pages'] : [$r['source']];
         fputcsv($fh, [
@@ -1491,7 +1492,7 @@ function build_csv(array $crawl): string {
             $r['type'],
             $r['internal'] ? 'internal' : 'external',
             $r['error'],
-        ]);
+        ], escape: '\\');
     }
     rewind($fh);
     $csv = stream_get_contents($fh);
