@@ -428,7 +428,6 @@ function http_request(string $url, string $method, array $args): array {
     curl_setopt_array($ch, curl_options($method, $args));
     $body = curl_exec($ch);
     $res  = curl_result($ch, $url, $method, $body);
-    curl_close($ch);
     return $res;
 }
 
@@ -479,7 +478,6 @@ function http_multi(array $jobs, array $args, int $concurrency): array {
             $job = $handles[$id];
             $results[$job['key']] = curl_result($ch, $job['url'], $job['method'], curl_multi_getcontent($ch));
             curl_multi_remove_handle($mh, $ch);
-            curl_close($ch);
             unset($handles[$id]);
             $launch();   // keep the window full
         }
