@@ -253,6 +253,37 @@ function normalizeUrl(string $href, string $base): ?string {
 }
 
 /**
+ * Browser/resource hints are not visitor-facing links, and WordPress exposes
+ * XML-RPC service-discovery endpoints as <link> metadata on every page. Those
+ * endpoints are commonly blocked by WAFs or hosts and should not count as
+ * broken links.
+ */
+function should_skip_link_element(DOMElement $node): bool {
+    $rel = strtolower(trim($node->getAttribute('rel')));
+    $tokens = $rel === '' ? [] : preg_split('/\s+/', $rel);
+
+    if ($tokens && array_intersect(
+            $tokens,
+            [
+                'preconnect',
+                'dns-prefetch',
+                'prefetch',
+                'preload',
+                'modulepreload',
+                'pingback',
+                'edituri',
+                'wlwmanifest',
+            ]
+        )) {
+        return true;
+    }
+
+    $type = strtolower(trim($node->getAttribute('type')));
+
+    return in_array($type, ['application/rsd+xml', 'application/wlwmanifest+xml'], true);
+}
+
+/**
  * Decide whether an <a> href is a "placeholder" — a link with no real
  * navigable target that the user almost certainly left unfinished. These are
  * the values normalizeUrl() would silently drop, so they'd never appear in the
@@ -828,19 +859,11 @@ function extractLinks(string $html, string $pageUrl, bool $checkAssets): array {
             if (!$node instanceof DOMElement) continue;
             $raw = trim($node->getAttribute($attr));
 
-            // Skip <link> connection/resource hints. Their href is a hostname or
-            // asset to warm up, not a navigable document: preconnect/dns-prefetch
-            // point at a bare CDN origin (fonts.googleapis.com/) that legitimately
-            // 404s, and preload/prefetch/modulepreload duplicate links fetched
-            // elsewhere. Testing them as links produces only false positives.
-            if ($type === 'link') {
-                $rel = strtolower(trim($node->getAttribute('rel')));
-                if ($rel !== '' && array_intersect(
-                        preg_split('/\s+/', $rel),
-                        ['preconnect', 'dns-prefetch', 'prefetch', 'preload', 'modulepreload']
-                    )) {
-                    continue;
-                }
+            // Skip <link> metadata/resource hints that are not visitor-facing
+            // navigation or assets. This avoids false positives from WordPress
+            // XML-RPC/RSD discovery links that hosts often block intentionally.
+            if ($type === 'link' && should_skip_link_element($node)) {
+                continue;
             }
 
             // Empty / placeholder anchors (href="", "#", "javascript:…") point
@@ -1598,8 +1621,9 @@ function main(array $argv): void {
     print_summary($crawl, $agg);
 }
 
-// Only auto-run from the command line. When this file is included from the
-// web UI (index.php) the functions above are reused without running main().
-if (PHP_SAPI === 'cli') {
+// Only auto-run when this file is the CLI entrypoint. When included from the
+// web UI or a small CLI verification script, the functions above are reused
+// without running main().
+if (PHP_SAPI === 'cli' && realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === __FILE__) {
     main($argv);
 }
