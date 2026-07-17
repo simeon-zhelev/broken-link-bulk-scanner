@@ -15,9 +15,9 @@ Works with any site (WordPress, Shopify, static, …) — no API key, no account
 
 With `--render`, each page is additionally loaded in **headless Chromium** (via [Playwright](https://playwright.dev)) so JavaScript runs and links built on the client are extracted from the live DOM — cURL still owns the HTTP status of each page and tests every discovered link. Rendering works on **macOS, Windows and Linux**: a small Node helper (`render-runner.js`) drives a managed Chromium that you install once, so there's no dependency on a system-installed browser at OS-specific paths.
 
-- a self-contained dark-themed HTML dashboard (`link_report.html`)
+- a self-contained styled HTML dashboard (`link_report.html`)
 - a CSV export (`link_report.csv`)
-- an optional PDF export (`--pdf`, prints the HTML report via headless Chromium)
+- an optional PDF export (`--pdf`, a concise problem-type summary plus a unique-error list with source-page counts)
 - a live console progress log + final summary
 
 `index.php` is a thin web wrapper over the same engine — it reuses the crawler and report builders directly (no duplicated logic), streams the progress log live to the browser, and embeds the finished report on the page.
@@ -31,7 +31,7 @@ php -S localhost:8083
 # then open http://localhost:8083
 ```
 
-Enter a URL, pick a few options (scan mode, max pages/depth, concurrency, asset/robots/TLS toggles, and an optional **Render JavaScript** toggle for SPAs), and hit **Scan**. You'll see a **live progress log** while it crawls, then the full report embedded on the page with **Open report**, **Download CSV**, and (when the render engine is set up) **Download PDF** buttons. Reports are written to a local `reports/` folder (git-ignored).
+Enter a URL, pick a few options (scan mode, max pages/depth, concurrency, asset/robots/TLS toggles, and an optional **Render JavaScript** toggle for SPAs), and hit **Scan**. You'll see a **live progress log** while it crawls, then the full report embedded on the page with **Open report** and (when the render engine is set up) **Download PDF** buttons. Reports are written to a local `reports/` folder (git-ignored).
 
 > Run the UI **locally only** — it fetches whatever URL you type, so don't expose it on a public host without adding your own authentication.
 
@@ -65,6 +65,16 @@ php link_checker.php --url=https://example.com --render --render-wait=6000
 
 The core scan needs no Node, no Composer, and no external services — Node is only pulled in when you ask for JavaScript rendering.
 
+## Tests
+
+Run the network-free regression suite with:
+
+```bash
+npm test
+```
+
+It covers URL resolution, robots.txt selection, redirect classification, page-failure exports, PDF problem-type grouping, UTF-8 truncation, and safe web progress rendering.
+
 ## Options
 
 | Option | Default | Description |
@@ -90,7 +100,7 @@ The core scan needs no Node, no Composer, and no external services — Node is o
 | `--user-agent` | *(built-in)* | Override the crawler User-Agent string |
 | `--output` | `link_report.html` | HTML report path |
 | `--csv` | `link_report.csv` | CSV export path |
-| `--pdf` | _(off)_ | Also export the report as PDF (needs the render engine: Node 18+ and `npx playwright install chromium`) |
+| `--pdf` | _(off)_ | Export a concise PDF grouped by problem type, followed by each unique error and its source-page count; full source-page details remain in the HTML report (needs the render engine: Node 18+ and `npx playwright install chromium`) |
 
 ## Report contents
 

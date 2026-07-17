@@ -54,6 +54,24 @@
 
 const DEFAULT_UA = 'BrokenLinkBulkScanner/1.0 (+link checker; cURL)';
 
+/**
+ * Send progress through an optional frontend-specific writer. The CLI leaves
+ * this unset and receives plain text; the web UI installs an HTML-escaping
+ * writer so content discovered on untrusted pages can never become markup.
+ */
+function set_progress_writer(?callable $writer): void {
+    $GLOBALS['blbs_progress_writer'] = $writer;
+}
+
+function progress(string $message): void {
+    $writer = $GLOBALS['blbs_progress_writer'] ?? null;
+    if (is_callable($writer)) {
+        $writer($message);
+        return;
+    }
+    echo $message;
+}
+
 function parse_args(array $argv): array {
     $defaults = [
         'url'             => null,
@@ -200,6 +218,18 @@ function canonicalize(string $url): string {
     return preg_replace_callback('/[\x00-\x20\x7F-\xFF]/', fn ($m) => rawurlencode($m[0]), $url);
 }
 
+/** Truncate UTF-8 text without requiring the optional mbstring extension. */
+function truncate_text(string $text, int $limit): string {
+    if ($limit < 0) return '';
+    if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+        return mb_strlen($text) > $limit ? mb_substr($text, 0, $limit) . '…' : $text;
+    }
+    if (preg_match_all('/./us', $text, $chars) !== false) {
+        return count($chars[0]) > $limit ? implode('', array_slice($chars[0], 0, $limit)) . '…' : $text;
+    }
+    return strlen($text) > $limit ? substr($text, 0, $limit) . '…' : $text;
+}
+
 /**
  * Turn a possibly-relative href into an absolute, canonical http(s) URL.
  * Returns null for things we should never test (mailto:, tel:, javascript:,
@@ -239,6 +269,13 @@ function normalizeUrl(string $href, string $base): ?string {
     // Root-relative: /path
     if ($href[0] === '/') {
         return canonicalize($authority . $href);
+    }
+    // Query-relative: replace the current document's query, not its filename.
+    // https://host/dir/page?old + ?new => https://host/dir/page?new
+    if ($href[0] === '?') {
+        $basePath = $b['path'] ?? '/';
+        if ($basePath === '') $basePath = '/';
+        return canonicalize($authority . $basePath . $href);
     }
     // Schemes we don't recognise but that still contain a colon early on
     // (e.g. "tel:" caught above) — guard against odd "foo:bar" values.
@@ -357,6 +394,22 @@ function parse_robots(string $txt): array {
     return $groups;
 }
 
+/** Select the most-specific robots group matching the crawler product token. */
+function robots_group_for_user_agent(array $groups, string $userAgent): array {
+    $product = strtolower(trim((string)preg_split('/[\s\/]/', trim($userAgent), 2)[0]));
+    $best = null;
+    $bestLen = -1;
+    foreach ($groups as $agent => $group) {
+        $agent = strtolower(trim((string)$agent));
+        if ($agent === '' || $agent === '*') continue;
+        if (str_contains($product, $agent) && strlen($agent) > $bestLen) {
+            $best = $group;
+            $bestLen = strlen($agent);
+        }
+    }
+    return $best ?? ($groups['*'] ?? []);
+}
+
 /** Does a robots rule (with * and $ wildcards) match this path? */
 function robots_match(string $path, string $rule): bool {
     $pattern = preg_quote($rule, '#');
@@ -386,7 +439,7 @@ function robots_allowed(string $path, array $group): bool {
     return $bestLen < 0 ? true : $bestAllow;
 }
 
-/** Fetch and parse robots.txt for the start URL's host; returns the '*' group. */
+/** Fetch and parse robots.txt for the start host; returns the applicable group. */
 function load_robots(string $startUrl, array $args): array {
     $p = parse_url($startUrl);
     $base = $p['scheme'] . '://' . $p['host'] . (isset($p['port']) ? ':' . $p['port'] : '');
@@ -395,7 +448,7 @@ function load_robots(string $startUrl, array $args): array {
         return [];   // no usable robots.txt → nothing disallowed
     }
     $groups = parse_robots($resp['body']);
-    return $groups['*'] ?? [];
+    return robots_group_for_user_agent($groups, (string)$args['user-agent']);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -608,7 +661,7 @@ function render_multi(array $urls, array $args): array {
     $proc = @proc_open($cmd, $descriptors, $pipes, dirname($args['runner']), $env);
     if (!is_resource($proc)) {
         @unlink($tmp);
-        echo "  ⚠ could not launch the render runner — using static HTML instead.\n";
+        progress("  ⚠ could not launch the render runner — using static HTML instead.\n");
         return $out;
     }
     fclose($pipes[0]);
@@ -647,10 +700,9 @@ function render_multi(array $urls, array $args): array {
                 continue;
             }
             if ($stream === $pipes[2]) {
-                // Pass the runner's live progress through. STDERR only exists in
-                // the CLI SAPI; under the web UI, echo it into the progress log.
-                if (defined('STDERR')) fwrite(STDERR, $chunk);
-                else echo $chunk;
+                // Route runner output through the same frontend-aware writer as
+                // crawler progress; URLs in this text originate on scanned sites.
+                progress($chunk);
             } else {
                 $buf .= $chunk;
                 while (($nl = strpos($buf, "\n")) !== false) {
@@ -679,7 +731,7 @@ function render_multi(array $urls, array $args): array {
  */
 function render_pages(array $fetchJobs, array $args): array {
     $urls = array_map(fn($job) => $job['url'], $fetchJobs);
-    echo "  🧭 fetching " . count($urls) . " page(s) with headless Chromium…\n";
+    progress("  🧭 fetching " . count($urls) . " page(s) with headless Chromium…\n");
     $rendered = render_multi($urls, $args);
 
     $pageResps = [];
@@ -705,7 +757,7 @@ function render_pages(array $fetchJobs, array $args): array {
     }
 
     if ($needCurl) {
-        echo "  ↩ " . count($needCurl) . " page(s) the browser couldn't fetch — falling back to cURL\n";
+        progress("  ↩ " . count($needCurl) . " page(s) the browser couldn't fetch — falling back to cURL\n");
         foreach (http_multi($needCurl, $args, $args['concurrency']) as $u => $resp) {
             $pageResps[$u] = $resp;
         }
@@ -724,12 +776,12 @@ function render_pages(array $fetchJobs, array $args): array {
 function render_pdf(string $htmlPath, string $pdfPath, array $args): bool {
     $problem = render_preflight_problem($args);
     if ($problem !== null) {
-        echo "  ⚠ PDF export needs the render engine — skipped.\n"
-           . "     " . str_replace("\n", "\n     ", $problem) . "\n";
+        progress("  ⚠ PDF export needs the render engine — skipped.\n"
+           . "     " . str_replace("\n", "\n     ", $problem) . "\n");
         return false;
     }
     if (!is_file($htmlPath)) {
-        echo "  ⚠ PDF export skipped — HTML report not found at {$htmlPath}.\n";
+        progress("  ⚠ PDF export skipped — HTML report not found at {$htmlPath}.\n");
         return false;
     }
 
@@ -750,7 +802,7 @@ function render_pdf(string $htmlPath, string $pdfPath, array $args): bool {
     $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
     $proc = @proc_open($cmd, $descriptors, $pipes, dirname($args['runner']), $env);
     if (!is_resource($proc)) {
-        echo "  ⚠ could not launch the render runner for PDF export — skipped.\n";
+        progress("  ⚠ could not launch the render runner for PDF export — skipped.\n");
         return false;
     }
     fclose($pipes[0]);
@@ -763,7 +815,7 @@ function render_pdf(string $htmlPath, string $pdfPath, array $args): bool {
 
     if ($code !== 0 || !is_file($pdfPath)) {
         $msg = trim($err) !== '' ? ' (' . trim(explode("\n", trim($err))[0]) . ')' : '';
-        echo "  ⚠ PDF export failed{$msg} — skipped.\n";
+        progress("  ⚠ PDF export failed{$msg} — skipped.\n");
         return false;
     }
     return true;
@@ -871,8 +923,7 @@ function extractLinks(string $html, string $pageUrl, bool $checkAssets): array {
             // dropping them. Real targets (#section, relative URLs) fall through
             // to normalizeUrl below and are tested over HTTP as usual.
             if ($type === 'a' && ($reason = placeholder_reason($raw)) !== null) {
-                $text = trim(preg_replace('/\s+/', ' ', $node->textContent ?? ''));
-                if (mb_strlen($text) > 80) $text = mb_substr($text, 0, 80) . '…';
+                $text = truncate_text(trim(preg_replace('/\s+/', ' ', $node->textContent ?? '')), 80);
 
                 // Capture the anchor's opening tag with all its attributes plus
                 // its text, so the report can show the whole element (e.g.
@@ -884,7 +935,7 @@ function extractLinks(string $html, string $pageUrl, bool $checkAssets): array {
                 }
                 $openTag .= '>';
                 $element = $openTag . $text . '</a>';
-                if (mb_strlen($element) > 200) $element = mb_substr($element, 0, 200) . '…';
+                $element = truncate_text($element, 200);
 
                 $key = 'placeholder|' . $reason[0] . '|' . $text;
                 if (isset($seen[$key])) continue;   // de-dupe within a page
@@ -911,12 +962,13 @@ function extractLinks(string $html, string $pageUrl, bool $checkAssets): array {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Map a status code (+ errno) to a class key and human label. */
-function classify(int $code, int $errno): array {
+function classify(int $code, int $errno, int $redirects = 0): array {
     if ($errno !== 0 || $code === 0)        return ['conn',     'Connection error'];
-    if ($code >= 200 && $code < 300)        return ['ok',       'OK'];
-    if ($code >= 300 && $code < 400)        return ['redirect', 'Redirect'];
     if ($code >= 400 && $code < 500)        return ['client',   'Client error'];
     if ($code >= 500)                       return ['server',   'Server error'];
+    if ($redirects > 0)                     return ['redirect', 'Redirect'];
+    if ($code >= 200 && $code < 300)        return ['ok',       'OK'];
+    if ($code >= 300 && $code < 400)        return ['redirect', 'Redirect'];
     return ['conn', 'Unknown'];
 }
 
@@ -950,8 +1002,8 @@ function crawl(array $args): array {
 
     $robots = $args['respect-robots'] ? load_robots($start, $args) : [];
     if ($args['respect-robots']) {
-        echo $robots ? "🤖 robots.txt loaded — disallowed paths will be skipped.\n"
-                     : "🤖 No robots.txt restrictions found.\n";
+        progress($robots ? "🤖 robots.txt loaded — disallowed paths will be skipped.\n"
+                         : "🤖 No robots.txt restrictions found.\n");
     }
 
     // Confirm the rendering prerequisites once if JS rendering was requested.
@@ -963,10 +1015,10 @@ function crawl(array $args): array {
             $engine = trim((string)($args['chrome-bin'] ?? '')) !== ''
                 ? "headless Chromium ({$args['chrome-bin']})"
                 : 'headless Chromium (Playwright)';
-            echo "🧭 JS rendering ON — {$engine}\n";
+            progress("🧭 JS rendering ON — {$engine}\n");
         } else {
-            echo "⚠  --render requested but unavailable — using static HTML instead.\n"
-               . "     " . str_replace("\n", "\n     ", $problem) . "\n";
+            progress("⚠  --render requested but unavailable — using static HTML instead.\n"
+               . "     " . str_replace("\n", "\n     ", $problem) . "\n");
         }
     }
 
@@ -978,8 +1030,8 @@ function crawl(array $args): array {
     $pagesFetched = 0;
     $depth = 0;
 
-    echo "\n🔗 Crawling {$start}  (mode: {$args['mode']}, max-pages: {$args['max-pages']}, "
-       . "depth: {$args['max-depth']}, concurrency: {$args['concurrency']})\n";
+    progress("\n🔗 Crawling {$start}  (mode: {$args['mode']}, max-pages: {$args['max-pages']}, "
+       . "depth: {$args['max-depth']}, concurrency: {$args['concurrency']})\n");
 
     while ($level && $pagesFetched < $args['max-pages']) {
         // Decide which pages in this level to actually fetch (skip visited /
@@ -988,11 +1040,11 @@ function crawl(array $args): array {
         foreach ($level as $pageUrl) {
             if (isset($visited[$pageUrl])) continue;
             if ($args['respect-robots'] && !robots_allowed(path_with_query($pageUrl), $robots)) {
-                echo "  ⤫ robots disallow — skipping: {$pageUrl}\n";
+                progress("  ⤫ robots disallow — skipping: {$pageUrl}\n");
                 continue;
             }
             if ($pagesFetched + count($fetchJobs) >= $args['max-pages']) {
-                echo "⚠  Reached max-pages cap ({$args['max-pages']}). Stopping crawl.\n";
+                progress("⚠  Reached max-pages cap ({$args['max-pages']}). Stopping crawl.\n");
                 break;
             }
             $visited[$pageUrl] = true;
@@ -1000,7 +1052,7 @@ function crawl(array $args): array {
         }
         if (!$fetchJobs) break;
 
-        echo "\n── depth {$depth} — fetching " . count($fetchJobs) . " page(s) in parallel\n";
+        progress("\n── depth {$depth} — fetching " . count($fetchJobs) . " page(s) in parallel\n");
         polite_delay($args);
 
         // In render mode the browser — not cURL — fetches pages, so JS-built
@@ -1022,17 +1074,17 @@ function crawl(array $args): array {
             if ($resp['errno'] !== 0 || $resp['code'] === 0 || $resp['code'] >= 400) {
                 $label = $resp['code'] > 0 ? "HTTP {$resp['code']}" : ('connection error: ' . $resp['error']);
                 $pageErrors[$pageUrl] = $label;
-                echo "  ⚠ could not load page ({$label}) — {$pageUrl}\n";
+                progress("  ⚠ could not load page ({$label}) — {$pageUrl}\n");
                 continue;
             }
             if (stripos($resp['ctype'], 'html') === false) {
-                echo "  · non-HTML page ({$resp['ctype']}) — not parsed — {$pageUrl}\n";
+                progress("  · non-HTML page ({$resp['ctype']}) — not parsed — {$pageUrl}\n");
                 continue;
             }
 
             $links = extractLinks($resp['body'], $resp['final'] ?: $pageUrl, $args['check-assets']);
             $tag = !empty($resp['rendered']) ? ' [rendered]' : '';
-            echo "  • {$pageUrl} — " . count($links) . " link(s){$tag}\n";
+            progress("  • {$pageUrl} — " . count($links) . " link(s){$tag}\n");
 
             foreach ($links as $lnk) {
                 // Empty/placeholder anchors point nowhere — record them
@@ -1068,6 +1120,14 @@ function crawl(array $args): array {
                 // so identical links found across the site become one row with a
                 // "found on N pages" count instead of repeating per page.
                 $u = $lnk['url'];
+                // Robots rules govern all crawler requests, including the HEAD
+                // and GET calls used to test a discovered internal link.
+                if ($args['respect-robots']
+                    && sameHost($u, $startHost)
+                    && !robots_allowed(path_with_query($u), $robots)) {
+                    progress("  ⤫ robots disallow — not testing: {$u}\n");
+                    continue;
+                }
                 if (isset($tested[$u])) {
                     $tested[$u]['sources'][$pageUrl] = true;       // tested earlier, seen again
                 } elseif (isset($newLinks[$u])) {
@@ -1089,13 +1149,13 @@ function crawl(array $args): array {
 
         // Test all newly-discovered links for this level in parallel.
         if ($newLinks) {
-            echo "  ↻ testing " . count($newLinks) . " new link(s) in parallel…\n";
+            progress("  ↻ testing " . count($newLinks) . " new link(s) in parallel…\n");
             polite_delay($args);
             $checked = checkLinks(array_keys($newLinks), $args);
             $broken = 0;
             foreach ($newLinks as $u => $meta) {
                 $chk = $checked[$u];
-                [$cls, $label] = classify($chk['code'], $chk['errno']);
+                [$cls, $label] = classify($chk['code'], $chk['errno'], $chk['redirects']);
                 if (is_broken($cls)) $broken++;
                 $tested[$u] = [
                     'url'       => $u,
@@ -1112,7 +1172,7 @@ function crawl(array $args): array {
                     'internal'  => sameHost($u, $startHost),
                 ];
             }
-            echo "    done — {$broken} broken in this batch\n";
+            progress("    done — {$broken} broken in this batch\n");
         }
 
         $level = $nextLevel;
@@ -1163,6 +1223,7 @@ function aggregate(array $crawl): array {
         'external' => $external,
         'broken'   => $broken,
         'placeholders' => $placeholders,
+        'pageFailures' => count($crawl['pageErrors'] ?? []),
         'totalLinks' => count($crawl['results']),
         'byCode'   => $byCode,
     ];
@@ -1174,13 +1235,13 @@ function aggregate(array $crawl): array {
 
 function class_color(string $class): string {
     switch ($class) {
-        case 'ok':       return '#2e9e5b';
-        case 'redirect': return '#2a78d6';
-        case 'client':   return '#d99a2b';
-        case 'server':   return '#cf4a3a';
+        case 'ok':       return '#22c55e';
+        case 'redirect': return '#3b82f6';
+        case 'client':   return '#f59e0b';
+        case 'server':   return '#ef4444';
         case 'conn':     return '#a855f7';
         case 'placeholder': return '#2dd4bf';
-        default:         return '#9a958c';
+        default:         return '#94a3b8';
     }
 }
 
@@ -1241,12 +1302,38 @@ CARD;
     $brokenClass = $broken === 0 ? 'tc-ok' : 'tc-broken';
     $total = $agg['totalLinks'];
     return <<<HTML
-<div class="section-title">Links by Status</div>
+<div class="section-title">🔗 Links by Status</div>
 <div class="cards">$html</div>
 <div class="stats">
   <span><strong class="$brokenClass">$broken</strong> / $total broken links</span>
   <span><strong>{$agg['internal']}</strong> internal</span>
   <span><strong>{$agg['external']}</strong> external</span>
+  <span><strong>{$agg['pageFailures']}</strong> pages failed to load</span>
+</div>
+HTML;
+}
+
+/** Page fetch failures are crawl results too, even when no links were extracted. */
+function page_errors_table(array $crawl): string {
+    if (empty($crawl['pageErrors'])) return '';
+
+    $rows = '';
+    foreach ($crawl['pageErrors'] as $url => $error) {
+        $urlEsc = htmlspecialchars((string)$url, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $errorEsc = htmlspecialchars((string)$error, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $rows .= '<tr><td class="url-cell"><a href="' . $urlEsc
+               . '" target="_blank" rel="noopener">' . short_url((string)$url) . '</a></td>'
+               . '<td class="note">' . $errorEsc . '</td></tr>';
+    }
+
+    return <<<HTML
+
+<div class="section-title">⚠ Pages That Failed To Load</div>
+<div class="table-wrap">
+  <table id="page-errors">
+    <thead><tr><th style="text-align:left">Page</th><th style="text-align:left">Error</th></tr></thead>
+    <tbody>$rows</tbody>
+  </table>
 </div>
 HTML;
 }
@@ -1258,7 +1345,7 @@ function full_table(array $crawl): string {
     foreach ($crawl['results'] as $r) {
         $i++;
         $redir = $r['redirects'] > 0 ? " <span class=\"mini\">↩{$r['redirects']}</span>" : '';
-        $note  = $r['error'] !== '' ? htmlspecialchars(mb_substr($r['error'], 0, 100))
+        $note  = $r['error'] !== '' ? htmlspecialchars(truncate_text($r['error'], 100))
                                     : ($r['final'] !== $r['url'] ? '→ ' . short_url($r['final']) : '');
         $scope = $r['internal'] ? 'int' : 'ext';
         $rows .= "<tr data-class=\"{$r['class']}\" data-broken=\"" . (is_broken($r['class']) ? '1' : '0') . "\">"
@@ -1274,16 +1361,16 @@ function full_table(array $crawl): string {
     }
     return <<<HTML
 
-<div class="section-title">All Tested Links</div>
+<div class="section-title">📋 All Tested Links</div>
 <div class="filters">
-  <button class="fbtn" data-filter="all">All</button>
+  <button class="fbtn active" data-filter="all">All</button>
   <button class="fbtn" data-filter="broken">Broken only</button>
   <button class="fbtn" data-filter="ok">OK</button>
   <button class="fbtn" data-filter="redirect">Redirect</button>
   <button class="fbtn" data-filter="client">4xx</button>
   <button class="fbtn" data-filter="server">5xx</button>
   <button class="fbtn" data-filter="conn">Connection</button>
-  <button class="fbtn active" data-filter="placeholder">Empty / placeholder</button>
+  <button class="fbtn" data-filter="placeholder">Empty / placeholder</button>
 </div>
 <div class="table-wrap">
   <table id="all-links">
@@ -1298,6 +1385,7 @@ HTML;
 
 function build_html(array $crawl, array $agg, array $args, string $generatedAt): string {
     $cards   = summary_cards($agg);
+    $pageErrors = page_errors_table($crawl);
     $full    = full_table($crawl);
     $startEsc = htmlspecialchars($args['url']);
     $modeEsc  = $args['mode'] === 'site' ? 'Whole site' : 'Single page';
@@ -1306,6 +1394,7 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
     $renderEsc = !empty($args['render']) ? 'on (headless Chromium)' : 'off';
     $concEsc   = (int)$args['concurrency'];
     $pages = $crawl['pagesFetched'];
+    $failedPages = count($crawl['pageErrors'] ?? []);
     $total = $agg['totalLinks'];
 
     return <<<HTML
@@ -1317,102 +1406,98 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
 <title>Broken Link Report — $generatedAt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Source+Sans+3:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-  /* ── Website Health Check report theme (teal) ── */
-  :root {
-    --ink: #0F1E33; --body: #33415C; --muted: #64748B; --soft: #94A3B8;
-    --line: #E6EAF1; --line-strong: #C9D4E5; --bg: #ffffff; --bg-soft: #F5F7FA;
-    --accent: #0D8A7E; --accent-tint: #E6F4F2; --accent-line: #BFE3DE;
-    --good: #1F9D5B; --warn: #E3A11F; --bad: #D64541;
-  }
-  *, *::before, *::after { box-sizing: border-box; }
-  body  { font-family: 'IBM Plex Sans', system-ui, Helvetica, Arial, sans-serif;
-          background: var(--bg-soft); color: var(--body); margin: 0; padding: 0 28px 40px;
-          line-height: 1.55; }
-  .brandbar { display: flex; align-items: center; gap: 14px; padding: 18px 0 16px;
-              margin-bottom: 24px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-  .brandbar .logo { width: 30px; height: 30px; border-radius: 50%; flex: none;
-    background: conic-gradient(var(--good) 0 76%, var(--line) 76% 100%);
-    display: grid; place-items: center; }
-  .brandbar .logo::before { content: ''; width: 20px; height: 20px; border-radius: 50%;
-    background: var(--bg-soft); }
-  .brandbar .brandname { font-family: 'Space Grotesk', sans-serif; font-weight: 700;
-    font-size: 17px; color: var(--ink); }
-  .brandbar .brandctx { color: var(--soft); font-size: 13px; }
-  .brandbar .sp { flex: 1; }
-  h1    { font-family: 'Space Grotesk', sans-serif; font-size: 1.6rem; margin: 6px 0 4px; color: var(--ink); }
-  .meta { font-size: 0.8rem; color: var(--muted); margin-bottom: 22px; line-height: 1.6; }
-  .meta strong { color: var(--ink); }
-  .section-title { font-family: 'Space Grotesk', sans-serif; font-size: 0.8rem; font-weight: 700;
-                   color: var(--muted); text-transform: uppercase; letter-spacing: .1em; margin: 32px 0 10px; }
-  .cards { display: flex; flex-wrap: wrap; gap: 12px; }
-  .card  { background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
-           padding: 16px 22px; min-width: 148px; flex: 1; }
-  .card-link { cursor: pointer; transition: background .12s, transform .12s, border-color .12s; }
-  .card-link:hover { background: var(--accent-tint); border-color: var(--accent-line); transform: translateY(-1px); }
-  .card-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .card-label { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-  .card-score { font-family: 'Space Grotesk', sans-serif; font-size: 2.4rem; font-weight: 700;
-                line-height: 1.1; margin: 4px 0; color: var(--ink); }
-  .card-sub   { font-size: 0.7rem; color: var(--soft); }
-  .stats { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 12px;
-           font-size: 0.85rem; color: var(--muted); }
-  .table-wrap { overflow-x: auto; border-radius: 12px; background: var(--bg);
-                border: 1px solid var(--line); margin-top: 4px; }
-  table  { width: 100%; border-collapse: collapse; font-size: 0.77rem; color: var(--body); }
-  th, td { padding: 8px 10px; text-align: center; border-bottom: 1px solid var(--line); }
-  th     { background: var(--bg-soft); color: var(--muted); font-weight: 600;
-           text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
-  td.url-cell { text-align: left; max-width: 360px; overflow: hidden;
-                text-overflow: ellipsis; white-space: nowrap; }
-  td.url-cell a { color: var(--accent); text-decoration: none; }
-  td.url-cell a:hover { text-decoration: underline; }
-  td.num   { color: var(--soft); width: 32px; }
-  td.ttype { color: var(--muted); font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 0.7rem; }
-  td.scope { color: var(--muted); font-size: 0.7rem; }
-  td.note  { text-align: left; color: var(--muted); font-size: 0.7rem;
-             max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  tr:hover td { background: var(--accent-tint); }
-  .badge { display: inline-block; min-width: 34px; padding: 2px 8px; border-radius: 12px;
-           color: #fff; font-weight: 700; font-size: 0.72rem; }
-  .mini  { display: inline-block; padding: 0 6px; border-radius: 8px; background: var(--bg-soft);
-           color: var(--ink); border: 1px solid var(--line); font-size: 0.66rem; margin-left: 4px; }
-  .filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
-  .fbtn  { background: var(--bg); color: var(--muted); border: 1px solid var(--line-strong);
-           border-radius: 8px; padding: 5px 12px; font-size: 0.74rem; cursor: pointer; }
-  .fbtn:hover  { background: var(--accent-tint); border-color: var(--accent-line); }
-  .fbtn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
-  code   { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 0.72rem;
-           background: var(--bg-soft); color: var(--ink); border: 1px solid var(--line);
-           padding: 1px 6px; border-radius: 6px; }
-  .legend { margin-top: 22px; font-size: 0.72rem; color: var(--muted); }
+  :root { --ink:#0F1E33; --body:#33415C; --muted:#64748B; --soft:#94A3B8;
+    --line:#E6EAF1; --line-strong:#C9D4E5; --bg:#fff; --bg-soft:#F5F7FA;
+    --accent:#0D8A7E; --accent-tint:#E6F4F2; --accent-line:#BFE3DE;
+    --good:#1F9D5B; --warn:#D97A2B; --bad:#D64541; --blue:#2A78D6; --purple:#7C5CE7; }
+  *,*::before,*::after { box-sizing:border-box; }
+  body { margin:0; padding:0 28px 40px; color:var(--body); background:var(--bg-soft);
+    font:16px/1.55 'Source Sans 3',system-ui,Helvetica,Arial,sans-serif; }
+  .report-shell { max-width:1400px; margin:0 auto; }
+  .brandbar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding:18px 0 16px;
+    margin-bottom:24px; border-bottom:1px solid var(--line); }
+  .brandbar .logo { display:grid; place-items:center; width:30px; height:30px; flex:none; border-radius:50%;
+    background:conic-gradient(var(--good) 0 76%,var(--line) 76% 100%); }
+  .brandbar .logo::before { content:''; width:20px; height:20px; border-radius:50%; background:var(--bg-soft); }
+  .brandname { color:var(--ink); font:700 17px 'Poppins',sans-serif; }
+  .brandctx { color:var(--soft); font-size:13px; }
+  .sp { flex:1; }
+  h1 { margin:6px 0 4px; color:var(--ink); font:700 1.6rem 'Poppins',sans-serif; }
+  .report-meta { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin:14px 0 26px; }
+  .rm-item { min-width:0; padding:12px 16px; background:var(--bg); border:1px solid var(--line); border-radius:12px; }
+  .rm-site { grid-column:1/-1; }
+  .rm-label { color:var(--soft); font-size:.68rem; font-weight:600; letter-spacing:.07em; text-transform:uppercase; }
+  .rm-value { margin-top:3px; overflow-wrap:anywhere; color:var(--ink); font:600 .95rem 'Poppins',sans-serif; }
+  .rm-value a { color:var(--accent); text-decoration:none; } .rm-value a:hover { text-decoration:underline; }
+  .section-title { margin:32px 0 10px; color:var(--muted); font:700 .8rem 'Poppins',sans-serif;
+    text-transform:uppercase; letter-spacing:.1em; }
+  .cards { display:flex; flex-wrap:wrap; gap:12px; }
+  .card { min-width:148px; flex:1; padding:16px 22px; background:var(--bg); border:1px solid var(--line); border-radius:12px; }
+  .card-link { cursor:pointer; transition:border-color .15s,box-shadow .15s,transform .15s; }
+  .card-link:hover { border-color:var(--accent-line); box-shadow:0 2px 10px rgba(13,138,126,.12); transform:translateY(-1px); }
+  .card-link:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .card-label { color:var(--muted); font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; }
+  .card-score { margin:4px 0; color:var(--ink); font:700 2.4rem/1.1 'Poppins',sans-serif; }
+  .card-sub { color:var(--soft); font-size:.7rem; }
+  .stats { display:flex; flex-wrap:wrap; gap:18px; margin-top:12px; color:var(--muted); font-size:.85rem; }
+  .table-wrap { overflow-x:auto; margin-top:4px; background:var(--bg); border:1px solid var(--line); border-radius:12px; }
+  table { width:100%; border-collapse:collapse; color:var(--body); font-size:.77rem; }
+  th,td { padding:9px 10px; text-align:center; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); background:var(--bg-soft); font-weight:600; letter-spacing:.05em; text-transform:uppercase; white-space:nowrap; }
+  td.url-cell { max-width:360px; overflow:hidden; text-align:left; text-overflow:ellipsis; white-space:nowrap; }
+  td.url-cell a { color:var(--accent); text-decoration:none; } td.url-cell a:hover { text-decoration:underline; }
+  td.num { width:32px; color:var(--soft); }
+  td.ttype { color:var(--muted); font:400 .7rem 'IBM Plex Mono',monospace; }
+  td.scope { color:var(--muted); font-size:.7rem; }
+  td.note { max-width:280px; overflow:hidden; color:var(--muted); text-align:left; text-overflow:ellipsis; white-space:nowrap; font-size:.7rem; }
+  tr:hover td { background:var(--accent-tint); }
+  .badge { display:inline-block; min-width:34px; padding:2px 8px; color:#fff; border-radius:12px; font-size:.72rem; font-weight:700; }
+  .mini { display:inline-block; margin-left:4px; padding:0 6px; color:var(--body); background:var(--line); border-radius:10px; font-size:.66rem; }
+  .filters { display:flex; flex-wrap:wrap; gap:7px; margin:4px 0 10px; }
+  .fbtn { padding:7px 13px; color:var(--muted); background:#fff; border:1px solid var(--line-strong);
+    border-radius:999px; cursor:pointer; font:600 .74rem 'Poppins',sans-serif; }
+  .fbtn:hover { color:var(--accent); border-color:var(--accent-line); background:var(--accent-tint); }
+  .fbtn.active { color:#fff; background:var(--accent); border-color:var(--accent); }
+  code { padding:1px 6px; color:var(--ink); background:var(--bg-soft); border:1px solid var(--line);
+    border-radius:6px; font:400 .72rem 'IBM Plex Mono',monospace; }
+  .legend { margin-top:22px; color:var(--muted); font-size:.72rem; }
   .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px; vertical-align:middle; }
 
   /* "Found on N pages" disclosure — collapses repeated per-page rows into one. */
-  details.pages > summary { cursor: pointer; color: var(--accent); white-space: nowrap; }
+  details.pages > summary { cursor:pointer; color:var(--accent); white-space:nowrap; }
   details.pages .pagelist { margin-top: 5px; line-height: 1.6; }
-  details.pages .pagelist a { color: var(--accent); text-decoration: none; }
+  details.pages .pagelist a { color:var(--accent); text-decoration:none; }
   details.pages .pagelist a:hover { text-decoration: underline; }
-  details.pages .more { color: var(--soft); font-size: 0.7rem; }
+  details.pages .more { color:var(--muted); font-size:.7rem; }
 
   /* Status palette — high-contrast shades (≥4.5:1) for the light theme. Applied
      via classes so badges and class labels stay legible on white. */
   .cls { font-weight: 600; }
-  .tc-ok { color: #24824a; }  .tc-redirect { color: #2a78d6; }
-  .tc-client { color: #a9761b; }  .tc-server { color: #b23527; }
-  .tc-conn { color: #7e22ce; }  .tc-placeholder { color: #0f766e; }
-  .tc-broken { color: #b23527; }
-  .badge-ok { background: #24824a; }  .badge-redirect { background: #2a78d6; }
-  .badge-client { background: #a9761b; }  .badge-server { background: #b23527; }
-  .badge-conn { background: #7e22ce; }  .badge-placeholder { background: #0f766e; }
+  .tc-ok { color:var(--good); } .tc-redirect { color:var(--blue); }
+  .tc-client { color:var(--warn); } .tc-server { color:var(--bad); }
+  .tc-conn { color:var(--purple); } .tc-placeholder { color:var(--accent); }
+  .tc-broken { color:var(--bad); }
+  .badge-ok { background:var(--good); } .badge-redirect { background:var(--blue); }
+  .badge-client { background:var(--warn); } .badge-server { background:var(--bad); }
+  .badge-conn { background:var(--purple); } .badge-placeholder { background:var(--accent); }
+
+  @media (max-width:600px) {
+    body { padding:0 14px 32px; }
+    .brandbar .sp { display:none; }
+    .brandctx { flex-basis:100%; padding-left:44px; }
+    .report-meta { gap:8px; }
+  }
 
   /* PDF / print: the colours already match the light screen theme, so this only
      fixes layout for paper — tables can't scroll, so let wide cells wrap instead
      of overflowing; repeat the header per page; keep rows whole; expand the page
      lists; and drop the interactive filter buttons that do nothing on paper. */
   @media print {
-    body { padding: 0 6px; }
+    body { padding:0 6px; background:#fff; }
+    .brandbar { margin-bottom:14px; }
+    .report-shell { max-width:none; }
     .table-wrap { overflow: visible; }
     details.pages > summary { list-style: none; }
     .filters { display: none; }
@@ -1433,26 +1518,30 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
 </style>
 </head>
 <body>
+<div class="report-shell">
 <header class="brandbar">
   <span class="logo"></span>
   <span class="brandname">Website Health Check</span>
   <span class="sp"></span>
-  <span class="brandctx">Broken-link report · powered by 2create</span>
+  <span class="brandctx">Broken link report · powered by 2create</span>
 </header>
 <h1>Broken Link Bulk Report</h1>
-<div class="meta">
-  Start URL: <strong>$startEsc</strong> &nbsp;|&nbsp;
-  Mode: <strong>$modeEsc</strong> &nbsp;|&nbsp;
-  Pages crawled: <strong>$pages</strong> &nbsp;|&nbsp;
-  Links tested: <strong>$total</strong><br>
-  Checked elements: <strong>$assetsEsc</strong> &nbsp;|&nbsp;
-  robots.txt: <strong>$robotsEsc</strong> &nbsp;|&nbsp;
-  JS rendering: <strong>$renderEsc</strong> &nbsp;|&nbsp;
-  Concurrency: <strong>$concEsc</strong> &nbsp;|&nbsp;
-  Generated: <strong>$generatedAt</strong>
+<div class="report-meta">
+  <div class="rm-item rm-site"><div class="rm-label">Site</div>
+    <div class="rm-value"><a href="$startEsc" target="_blank" rel="noopener">$startEsc</a></div></div>
+  <div class="rm-item"><div class="rm-label">Pages crawled</div><div class="rm-value">$pages</div></div>
+  <div class="rm-item"><div class="rm-label">Links tested</div><div class="rm-value">$total</div></div>
+  <div class="rm-item"><div class="rm-label">Pages failed</div><div class="rm-value">$failedPages</div></div>
+  <div class="rm-item"><div class="rm-label">Scan mode</div><div class="rm-value">$modeEsc</div></div>
+  <div class="rm-item"><div class="rm-label">Elements checked</div><div class="rm-value">$assetsEsc</div></div>
+  <div class="rm-item"><div class="rm-label">robots.txt</div><div class="rm-value">$robotsEsc</div></div>
+  <div class="rm-item"><div class="rm-label">JavaScript rendering</div><div class="rm-value">$renderEsc</div></div>
+  <div class="rm-item"><div class="rm-label">Concurrency</div><div class="rm-value">$concEsc</div></div>
+  <div class="rm-item"><div class="rm-label">Generated</div><div class="rm-value">$generatedAt</div></div>
 </div>
 
 $cards
+$pageErrors
 $full
 
 <div class="legend">
@@ -1462,6 +1551,7 @@ $full
   <span class="dot badge-server"></span> Server error (5xx) &nbsp;
   <span class="dot badge-conn"></span> Connection error &nbsp;
   <span class="dot badge-placeholder"></span> Empty / placeholder link
+</div>
 </div>
 
 <script>
@@ -1496,8 +1586,8 @@ $full
     });
   });
 
-  // Default view: show the Empty / placeholder links (matches the active button).
-  setFilter('placeholder');
+  // Default view: show the complete result set.
+  setFilter('all');
 
   // Expand every "N pages" disclosure when printing (incl. Save as PDF) so the
   // full page list is visible on paper, then collapse again afterwards.
@@ -1512,6 +1602,279 @@ HTML;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Concise PDF template
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Collapse detailed link/page records into problem types for the PDF. The HTML
+ * report deliberately keeps every instance; the PDF is a compact handoff that
+ * shows only categories/statuses and their counts.
+ */
+function pdf_problem_types(array $crawl): array {
+    $types = [];
+    $add = static function (string $key, string $category, string $detail, string $tone) use (&$types): void {
+        if (!isset($types[$key])) {
+            $types[$key] = [
+                'category' => $category,
+                'detail'   => $detail,
+                'tone'     => $tone,
+                'count'    => 0,
+            ];
+        }
+        $types[$key]['count']++;
+    };
+
+    foreach (($crawl['results'] ?? []) as $r) {
+        $class = (string)($r['class'] ?? '');
+        if ($class === 'ok') continue;
+
+        if ($class === 'redirect') {
+            $add('redirect', 'Redirect', 'Followed redirect chain', 'redirect');
+        } elseif ($class === 'client') {
+            $code = (int)($r['code'] ?? 0);
+            $add("client|{$code}", 'Client error', $code > 0 ? "HTTP {$code}" : '4xx response', 'client');
+        } elseif ($class === 'server') {
+            $code = (int)($r['code'] ?? 0);
+            $add("server|{$code}", 'Server error', $code > 0 ? "HTTP {$code}" : '5xx response', 'server');
+        } elseif ($class === 'conn') {
+            $add('conn', 'Connection error', 'Network, timeout, DNS or TLS failure', 'conn');
+        } elseif ($class === 'placeholder') {
+            $detail = (string)($r['label'] ?? 'Empty / placeholder link');
+            $add('placeholder|' . $detail, 'Empty / placeholder', $detail, 'placeholder');
+        }
+    }
+
+    foreach (($crawl['pageErrors'] ?? []) as $error) {
+        $error = (string)$error;
+        $detail = preg_match('/^HTTP\s+\d+/', $error, $m) ? $m[0] : 'Connection or rendering failure';
+        $add('page|' . $detail, 'Page failed to load', $detail, 'page');
+    }
+
+    $order = ['client' => 1, 'server' => 2, 'conn' => 3, 'page' => 4, 'redirect' => 5, 'placeholder' => 6];
+    uasort($types, static function (array $a, array $b) use ($order): int {
+        $byTone = ($order[$a['tone']] ?? 99) <=> ($order[$b['tone']] ?? 99);
+        return $byTone !== 0 ? $byTone : strnatcasecmp($a['detail'], $b['detail']);
+    });
+    return array_values($types);
+}
+
+/**
+ * List each unique error record once, with the number of distinct source pages
+ * on which it was found. The crawler has already collapsed repeated instances
+ * of the same link into one result and retained its source-page set.
+ */
+function pdf_unique_errors(array $crawl): array {
+    $errors = [];
+    foreach (($crawl['results'] ?? []) as $r) {
+        $class = (string)($r['class'] ?? '');
+        if (!is_broken($class) && $class !== 'placeholder') continue;
+
+        $code = (int)($r['code'] ?? 0);
+        if ($class === 'client') {
+            $category = 'Client error';
+            $status = $code > 0 ? "HTTP {$code}" : '4xx response';
+        } elseif ($class === 'server') {
+            $category = 'Server error';
+            $status = $code > 0 ? "HTTP {$code}" : '5xx response';
+        } elseif ($class === 'conn') {
+            $category = 'Connection error';
+            $status = 'Network, timeout, DNS or TLS failure';
+        } else {
+            $category = 'Empty / placeholder';
+            $status = (string)($r['label'] ?? 'Empty / placeholder link');
+        }
+
+        $sourcePages = array_values(array_unique(array_filter(
+            array_map('strval', (array)($r['pages'] ?? [])),
+            static fn(string $page): bool => $page !== ''
+        )));
+        $pageCount = $sourcePages ? count($sourcePages) : max(1, (int)($r['pageCount'] ?? 1));
+        $errors[] = [
+            'category' => $category,
+            'status'   => $status,
+            'target'   => (string)($r['url'] ?? ''),
+            'tone'     => $class,
+            'pages'    => $pageCount,
+        ];
+    }
+
+    foreach (($crawl['pageErrors'] ?? []) as $url => $error) {
+        $errors[] = [
+            'category' => 'Page failed to load',
+            'status'   => (string)$error,
+            'target'   => (string)$url,
+            'tone'     => 'page',
+            'pages'    => 1,
+        ];
+    }
+
+    usort($errors, static function (array $a, array $b): int {
+        $byCategory = strnatcasecmp($a['category'], $b['category']);
+        return $byCategory !== 0 ? $byCategory : strnatcasecmp($a['target'], $b['target']);
+    });
+    return $errors;
+}
+
+/** Build the PDF-only summary without expanding source-page instances. */
+function build_pdf_html(array $crawl, array $agg, array $args, string $generatedAt): string {
+    $types = pdf_problem_types($crawl);
+    $rows = '';
+    foreach ($types as $type) {
+        $category = htmlspecialchars($type['category'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $detail = htmlspecialchars($type['detail'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $tone = preg_replace('/[^a-z]/', '', (string)$type['tone']);
+        $count = (int)$type['count'];
+        $rows .= "<tr><td><span class=\"type-dot t-{$tone}\"></span><strong>{$category}</strong></td>"
+               . "<td>{$detail}</td><td class=\"count\">{$count}</td></tr>";
+    }
+    if ($rows === '') {
+        $rows = '<tr><td colspan="3" class="clean">No automated link problems were detected.</td></tr>';
+    }
+
+    $errors = pdf_unique_errors($crawl);
+    $errorRows = '';
+    foreach ($errors as $error) {
+        $category = htmlspecialchars($error['category'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $status = htmlspecialchars($error['status'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $target = htmlspecialchars($error['target'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $tone = preg_replace('/[^a-z]/', '', (string)$error['tone']);
+        $pageCount = (int)$error['pages'];
+        $errorRows .= "<tr><td><span class=\"type-dot t-{$tone}\"></span><strong>{$category}</strong>"
+                    . "<div class=\"error-status\">{$status}</div></td>"
+                    . "<td class=\"error-url\">{$target}</td><td class=\"pages\">{$pageCount}</td></tr>";
+    }
+    if ($errorRows === '') {
+        $errorRows = '<tr><td colspan="3" class="clean">No unique errors were detected.</td></tr>';
+    }
+    $errorCount = count($errors);
+
+    $startEsc = htmlspecialchars((string)$args['url'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    $modeEsc = ($args['mode'] ?? 'site') === 'site' ? 'Whole site' : 'Single page';
+    $pages = (int)($crawl['pagesFetched'] ?? 0);
+    $typeCount = count($types);
+    $broken = (int)($agg['broken'] ?? 0);
+    $redirects = (int)($agg['counts']['redirect'] ?? 0);
+    $placeholders = (int)($agg['placeholders'] ?? 0);
+    $pageFailures = (int)($agg['pageFailures'] ?? 0);
+
+    return <<<HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Broken Link Summary - $generatedAt</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Source+Sans+3:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --ink:#0F1E33; --body:#33415C; --muted:#64748B; --soft:#94A3B8;
+    --line:#E6EAF1; --bg:#fff; --bg-soft:#F5F7FA; --accent:#0D8A7E;
+    --good:#1F9D5B; --warn:#D97A2B; --bad:#D64541; --blue:#2A78D6; --purple:#7C5CE7; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:0 34px 34px; color:var(--body); background:var(--bg-soft);
+    font:15px/1.5 'Source Sans 3',system-ui,sans-serif; }
+  .brandbar { display:flex; align-items:center; gap:14px; padding:18px 0 16px;
+    margin-bottom:24px; border-bottom:1px solid var(--line); }
+  .logo { display:grid; place-items:center; width:30px; height:30px; border-radius:50%;
+    background:conic-gradient(var(--good) 0 76%,var(--line) 76% 100%); }
+  .logo::before { content:''; width:20px; height:20px; border-radius:50%; background:var(--bg-soft); }
+  .brandname { color:var(--ink); font:700 17px 'Poppins',sans-serif; }
+  .brandctx { margin-left:auto; color:var(--soft); font-size:13px; }
+  h1 { margin:0 0 4px; color:var(--ink); font:700 28px 'Poppins',sans-serif; }
+  .intro { max-width:760px; margin:0 0 20px; color:var(--muted); }
+  .meta { display:grid; grid-template-columns:2fr repeat(3,1fr); gap:12px; margin-bottom:22px; }
+  .meta-item,.stat { padding:12px 16px; background:var(--bg); border:1px solid var(--line); border-radius:12px; }
+  .label { color:var(--soft); font-size:10px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; }
+  .value { margin-top:3px; overflow-wrap:anywhere; color:var(--ink); font:600 14px 'Poppins',sans-serif; }
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:0 0 24px; }
+  .stat { text-align:center; }
+  .stat .n { color:var(--ink); font:700 27px/1.1 'Poppins',sans-serif; }
+  .stat .l { margin-top:4px; color:var(--muted); font-size:11px; }
+  .stat.bad .n { color:var(--bad); } .stat.warn .n { color:var(--warn); } .stat.teal .n { color:var(--accent); }
+  h2 { margin:0 0 10px; color:var(--muted); font:700 12px 'Poppins',sans-serif;
+    letter-spacing:.1em; text-transform:uppercase; }
+  .table-wrap { overflow:hidden; background:var(--bg); border:1px solid var(--line); border-radius:12px; }
+  table { width:100%; border-collapse:collapse; }
+  th,td { padding:11px 14px; border-bottom:1px solid var(--line); text-align:left; }
+  th { color:var(--muted); background:var(--bg-soft); font-size:11px; letter-spacing:.06em; text-transform:uppercase; }
+  tr:last-child td { border-bottom:0; }
+  td.count,th.count { width:90px; text-align:center; font-weight:700; color:var(--ink); }
+  td.pages,th.pages { width:110px; text-align:center; font-weight:700; color:var(--ink); }
+  .type-dot { display:inline-block; width:9px; height:9px; margin-right:8px; border-radius:50%; }
+  .t-client,.t-redirect { background:var(--warn); } .t-server,.t-page { background:var(--bad); }
+  .t-conn { background:var(--purple); } .t-placeholder { background:var(--accent); }
+  .section-next { margin-top:22px; }
+  .error-status { margin:2px 0 0 17px; color:var(--muted); font-size:11px; }
+  .error-url { color:var(--ink); overflow-wrap:anywhere; word-break:break-word; }
+  .clean { padding:24px; color:var(--good); text-align:center; }
+  .footnote { margin-top:14px; color:var(--soft); font-size:11px; }
+  @media print { body { background:#fff; padding:0; } .meta-item,.stat,.summary-wrap { break-inside:avoid; }
+    thead { display:table-header-group; } tr { break-inside:avoid; } .section-next { break-after:avoid; } }
+</style>
+</head>
+<body>
+<header class="brandbar"><span class="logo"></span><span class="brandname">Website Health Check</span>
+  <span class="brandctx">Broken link summary · powered by 2create</span></header>
+<h1>Broken Link Summary</h1>
+<p class="intro">This PDF groups findings by problem type and lists each unique error once. Repeated source-page instances and full page details remain available in the HTML report.</p>
+<div class="meta">
+  <div class="meta-item"><div class="label">Site</div><div class="value">$startEsc</div></div>
+  <div class="meta-item"><div class="label">Scan mode</div><div class="value">$modeEsc</div></div>
+  <div class="meta-item"><div class="label">Pages scanned</div><div class="value">$pages</div></div>
+  <div class="meta-item"><div class="label">Generated</div><div class="value">$generatedAt</div></div>
+</div>
+<div class="stats">
+  <div class="stat teal"><div class="n">$typeCount</div><div class="l">Problem types</div></div>
+  <div class="stat bad"><div class="n">$broken</div><div class="l">Broken links</div></div>
+  <div class="stat warn"><div class="n">$redirects</div><div class="l">Redirected links</div></div>
+  <div class="stat"><div class="n">$pageFailures</div><div class="l">Pages failed</div></div>
+</div>
+<h2>Problem types</h2>
+<div class="table-wrap summary-wrap"><table>
+  <thead><tr><th>Category</th><th>Type / status</th><th class="count">Count</th></tr></thead>
+  <tbody>$rows</tbody>
+</table></div>
+<h2 class="section-next">Unique errors ($errorCount)</h2>
+<div class="table-wrap error-wrap"><table>
+  <thead><tr><th>Error / status</th><th>Affected link or page</th><th class="pages">Pages</th></tr></thead>
+  <tbody>$errorRows</tbody>
+</table></div>
+<p class="footnote">Placeholder links: $placeholders. Each error is listed once; Pages is the number of distinct source pages where the affected link appears (or 1 for a failed page).</p>
+</body>
+</html>
+HTML;
+}
+
+/** Render the PDF from its concise template without modifying the HTML report. */
+function render_issue_summary_pdf(array $crawl, array $agg, array $args,
+                                  string $pdfPath, string $generatedAt): bool {
+    $tmpBase = tempnam(sys_get_temp_dir(), 'blbs_pdf_');
+    if ($tmpBase === false) {
+        progress("  ⚠ Could not create the temporary PDF summary — skipped.\n");
+        return false;
+    }
+    // Chromium determines how to load file:// content from the extension. Keep
+    // the unique temp name, but give the summary an HTML suffix so it is
+    // rendered as a document rather than printed as plain source code.
+    $tmp = $tmpBase . '.html';
+    if (!@rename($tmpBase, $tmp)) {
+        @unlink($tmpBase);
+        progress("  ⚠ Could not prepare the temporary PDF summary — skipped.\n");
+        return false;
+    }
+    try {
+        if (file_put_contents($tmp, build_pdf_html($crawl, $agg, $args, $generatedAt)) === false) {
+            progress("  ⚠ Could not write the temporary PDF summary — skipped.\n");
+            return false;
+        }
+        return render_pdf($tmp, $pdfPath, $args);
+    } finally {
+        @unlink($tmp);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  CSV export
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1523,10 +1886,9 @@ function build_csv(array $crawl): string {
     // page list (capped in the HTML/PDF) is never lost in the data export.
     $fields = ['link_url', 'source_page', 'found_on_count', 'all_source_pages',
                'status_code', 'classification', 'label', 'final_url',
-               'method', 'redirects', 'link_type', 'scope', 'error'];
+               'method', 'redirects', 'link_type', 'scope', 'error', 'record_type'];
     $fh = fopen('php://temp', 'r+');
-    // Explicit escape: PHP 8.4 deprecates omitting it (default is being removed).
-    fputcsv($fh, $fields, escape: '\\');
+    fputcsv($fh, $fields, ',', '"', '');
     foreach ($crawl['results'] as $r) {
         $pages = !empty($r['pages']) ? $r['pages'] : [$r['source']];
         fputcsv($fh, [
@@ -1543,7 +1905,15 @@ function build_csv(array $crawl): string {
             $r['type'],
             $r['internal'] ? 'internal' : 'external',
             $r['error'],
-        ], escape: '\\');
+            'link',
+        ], ',', '"', '');
+    }
+    foreach (($crawl['pageErrors'] ?? []) as $url => $error) {
+        $status = preg_match('/^HTTP\s+(\d+)/', (string)$error, $m) ? $m[1] : '0';
+        fputcsv($fh, [
+            $url, $url, 1, $url, $status, 'page_error', 'Page failed to load',
+            $url, 'GET', 0, 'page', 'internal', $error, 'page_error',
+        ], ',', '"', '');
     }
     rewind($fh);
     $csv = stream_get_contents($fh);
@@ -1565,6 +1935,7 @@ function print_summary(array $crawl, array $agg): void {
         $c['ok'], $c['redirect'], $c['client'], $c['server'], $c['conn']);
     printf("  Broken total  : %d\n", $agg['broken']);
     printf("  Placeholders  : %d  (empty / # / javascript: links)\n", $agg['placeholders']);
+    printf("  Page failures : %d\n", $agg['pageFailures']);
 
     if ($agg['broken'] > 0) {
         echo "\n  Broken links:\n";
@@ -1612,7 +1983,7 @@ function main(array $argv): void {
 
     // 5 — Optional PDF export
     if (trim((string)$args['pdf']) !== '') {
-        if (render_pdf($args['output'], $args['pdf'], $args)) {
+        if (render_issue_summary_pdf($crawl, $agg, $args, $args['pdf'], $generatedAt)) {
             echo "✅  PDF export  → {$args['pdf']}\n";
         }
     }
@@ -1621,9 +1992,10 @@ function main(array $argv): void {
     print_summary($crawl, $agg);
 }
 
-// Only auto-run when this file is the CLI entrypoint. When included from the
-// web UI or a small CLI verification script, the functions above are reused
-// without running main().
-if (PHP_SAPI === 'cli' && realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === __FILE__) {
+// Auto-run only when this file is the CLI entry point. This keeps the engine
+// safely reusable from the web UI and from the regression test harness.
+if (PHP_SAPI === 'cli'
+    && isset($_SERVER['SCRIPT_FILENAME'])
+    && realpath((string)$_SERVER['SCRIPT_FILENAME']) === __FILE__) {
     main($argv);
 }

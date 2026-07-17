@@ -8,6 +8,7 @@
     "render-runner": "render-runner.js"
   },
   "scripts": {
+    "test": "php tests/regression.php",
     "postinstall": "echo '\\nNext: install the browser engine ->  npx playwright install chromium\\n'",
     "browser": "playwright install chromium"
   },
