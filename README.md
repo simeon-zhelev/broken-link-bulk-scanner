@@ -17,7 +17,7 @@ With `--render`, each page is additionally loaded in **headless Chromium** (via 
 
 - a self-contained styled HTML dashboard (`link_report.html`)
 - a CSV export (`link_report.csv`)
-- an optional PDF export (`--pdf`, a concise problem-type summary plus a unique-error list with source-page counts)
+- an optional A4 landscape PDF export (`--pdf`) matching the full generated HTML report
 - a live console progress log + final summary
 
 `index.php` is a thin web wrapper over the same engine — it reuses the crawler and report builders directly (no duplicated logic), streams the progress log live to the browser, and embeds the finished report on the page.
@@ -73,7 +73,7 @@ Run the network-free regression suite with:
 npm test
 ```
 
-It covers URL resolution, robots.txt selection, redirect classification, page-failure exports, PDF problem-type grouping, UTF-8 truncation, and safe web progress rendering.
+It covers URL resolution, robots.txt selection, redirect classification, page-failure exports, full-report PDF parity and landscape rendering, UTF-8 truncation, and safe web progress rendering.
 
 ## Options
 
@@ -100,7 +100,7 @@ It covers URL resolution, robots.txt selection, redirect classification, page-fa
 | `--user-agent` | *(built-in)* | Override the crawler User-Agent string |
 | `--output` | `link_report.html` | HTML report path |
 | `--csv` | `link_report.csv` | CSV export path |
-| `--pdf` | _(off)_ | Export a concise PDF grouped by problem type, followed by each unique error and its source-page count; full source-page details remain in the HTML report (needs the render engine: Node 18+ and `npx playwright install chromium`) |
+| `--pdf` | _(off)_ | Export the full generated HTML report as an A4 landscape PDF (needs the render engine: Node 18+ and `npx playwright install chromium`) |
 
 ## Report contents
 

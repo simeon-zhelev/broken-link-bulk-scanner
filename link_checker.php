@@ -1247,7 +1247,8 @@ function class_color(string $class): string {
 
 function status_badge(array $r): string {
     $code = $r['code'] > 0 ? (string)$r['code'] : 'ERR';
-    return "<span class=\"badge badge-{$r['class']}\">$code</span>";
+    $errorClass = $r['code'] > 0 ? '' : ' badge-error';
+    return "<span class=\"badge badge-{$r['class']}$errorClass\">$code</span>";
 }
 
 function short_url(string $url): string {
@@ -1275,9 +1276,10 @@ function sources_cell(array $r): string {
          . '<div class="pagelist">' . $items . '</div></details>';
 }
 
-function summary_cards(array $agg): string {
+function status_filter_cards(array $agg): string {
     $c = $agg['counts'];
     $cards = [
+        ['All',              $agg['totalLinks'], 'all'],
         ['OK (2xx)',         $c['ok'],       'ok'],
         ['Redirect (3xx)',   $c['redirect'], 'redirect'],
         ['Client (4xx)',     $c['client'],   'client'],
@@ -1287,30 +1289,19 @@ function summary_cards(array $agg): string {
     ];
     $html = '';
     foreach ($cards as [$label, $n, $slug]) {
-        // Each card filters the All Tested Links table to its status on click.
+        $active = $slug === 'all' ? ' active' : '';
+        $pressed = $slug === 'all' ? 'true' : 'false';
         $html .= <<<CARD
 
-      <div class="card card-link" data-filter="$slug" role="button" tabindex="0"
-           title="Show $label links in the table below">
+      <button type="button" class="card card-link$active" data-filter="$slug"
+              aria-pressed="$pressed" title="Show $label links in the table below">
         <div class="card-label">$label</div>
-        <div class="card-score tc-$slug">$n</div>
-        <div class="card-sub">links</div>
-      </div>
+        <div class="card-value"><span class="card-score tc-$slug">$n</span><span class="card-sub">links</span></div>
+      </button>
 CARD;
     }
-    $broken = $agg['broken'];
-    $brokenClass = $broken === 0 ? 'tc-ok' : 'tc-broken';
-    $total = $agg['totalLinks'];
-    return <<<HTML
-<div class="section-title">🔗 Links by Status</div>
-<div class="cards">$html</div>
-<div class="stats">
-  <span><strong class="$brokenClass">$broken</strong> / $total broken links</span>
-  <span><strong>{$agg['internal']}</strong> internal</span>
-  <span><strong>{$agg['external']}</strong> external</span>
-  <span><strong>{$agg['pageFailures']}</strong> pages failed to load</span>
-</div>
-HTML;
+    return '<div class="status-filters" role="group" aria-label="Filter tested links by status">'
+         . $html . '</div>';
 }
 
 /** Page fetch failures are crawl results too, even when no links were extracted. */
@@ -1338,8 +1329,8 @@ function page_errors_table(array $crawl): string {
 HTML;
 }
 
-/** Full results table with client-side filter buttons. */
-function full_table(array $crawl): string {
+/** Full results table with compact status-summary cards acting as filters. */
+function full_table(array $crawl, array $agg): string {
     $rows = '';
     $i = 0;
     foreach ($crawl['results'] as $r) {
@@ -1359,19 +1350,11 @@ function full_table(array $crawl): string {
                . "<td class=\"note\">$note</td>"
                . "</tr>";
     }
+    $filters = status_filter_cards($agg);
     return <<<HTML
 
-<div class="section-title">📋 All Tested Links</div>
-<div class="filters">
-  <button class="fbtn active" data-filter="all">All</button>
-  <button class="fbtn" data-filter="broken">Broken only</button>
-  <button class="fbtn" data-filter="ok">OK</button>
-  <button class="fbtn" data-filter="redirect">Redirect</button>
-  <button class="fbtn" data-filter="client">4xx</button>
-  <button class="fbtn" data-filter="server">5xx</button>
-  <button class="fbtn" data-filter="conn">Connection</button>
-  <button class="fbtn" data-filter="placeholder">Empty / placeholder</button>
-</div>
+<div class="section-title">🔗 All Tested Links</div>
+$filters
 <div class="table-wrap">
   <table id="all-links">
     <thead><tr><th>#</th><th>Status</th><th style="text-align:left">Class</th>
@@ -1384,9 +1367,8 @@ HTML;
 }
 
 function build_html(array $crawl, array $agg, array $args, string $generatedAt): string {
-    $cards   = summary_cards($agg);
     $pageErrors = page_errors_table($crawl);
-    $full    = full_table($crawl);
+    $full    = full_table($crawl, $agg);
     $startEsc = htmlspecialchars($args['url']);
     $modeEsc  = $args['mode'] === 'site' ? 'Whole site' : 'Single page';
     $assetsEsc = $args['check-assets'] ? 'a, img, link, script' : 'a only';
@@ -1422,26 +1404,31 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
     background:conic-gradient(var(--good) 0 76%,var(--line) 76% 100%); }
   .brandbar .logo::before { content:''; width:20px; height:20px; border-radius:50%; background:var(--bg-soft); }
   .brandname { color:var(--ink); font:700 17px 'Poppins',sans-serif; }
-  .brandctx { color:var(--soft); font-size:13px; }
-  .sp { flex:1; }
   h1 { margin:6px 0 4px; color:var(--ink); font:700 1.6rem 'Poppins',sans-serif; }
-  .report-meta { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin:14px 0 26px; }
-  .rm-item { min-width:0; padding:12px 16px; background:var(--bg); border:1px solid var(--line); border-radius:12px; }
-  .rm-site { grid-column:1/-1; }
-  .rm-label { color:var(--soft); font-size:.68rem; font-weight:600; letter-spacing:.07em; text-transform:uppercase; }
-  .rm-value { margin-top:3px; overflow-wrap:anywhere; color:var(--ink); font:600 .95rem 'Poppins',sans-serif; }
+  .report-meta { display:grid; grid-template-columns:repeat(9,minmax(0,1fr)); gap:8px; margin:12px 0 22px; }
+  .rm-item { min-width:0; padding:9px 10px; background:var(--bg); border:1px solid var(--line); border-radius:10px; }
+  .rm-site { grid-column:1/-1; padding:10px 14px; }
+  .rm-label { color:var(--soft); font-size:.58rem; font-weight:600; letter-spacing:.065em; text-transform:uppercase; }
+  .rm-value { margin-top:2px; overflow-wrap:anywhere; color:var(--ink);
+    font:600 .74rem/1.25 'Poppins',sans-serif; }
+  .rm-site .rm-value { font-size:.9rem; }
   .rm-value a { color:var(--accent); text-decoration:none; } .rm-value a:hover { text-decoration:underline; }
   .section-title { margin:32px 0 10px; color:var(--muted); font:700 .8rem 'Poppins',sans-serif;
     text-transform:uppercase; letter-spacing:.1em; }
-  .cards { display:flex; flex-wrap:wrap; gap:12px; }
-  .card { min-width:148px; flex:1; padding:16px 22px; background:var(--bg); border:1px solid var(--line); border-radius:12px; }
-  .card-link { cursor:pointer; transition:border-color .15s,box-shadow .15s,transform .15s; }
+  .status-filters { display:grid; grid-template-columns:repeat(7,minmax(108px,1fr)); gap:8px;
+    overflow-x:auto; margin:0 0 10px; padding-bottom:2px; }
+  .card { min-width:0; padding:9px 11px; color:inherit; text-align:left; background:var(--bg);
+    border:1px solid var(--line); border-radius:10px; font:inherit; }
+  .card-link { cursor:pointer; transition:border-color .15s,box-shadow .15s,transform .15s,background .15s; }
   .card-link:hover { border-color:var(--accent-line); box-shadow:0 2px 10px rgba(13,138,126,.12); transform:translateY(-1px); }
   .card-link:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-  .card-label { color:var(--muted); font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; }
-  .card-score { margin:4px 0; color:var(--ink); font:700 2.4rem/1.1 'Poppins',sans-serif; }
-  .card-sub { color:var(--soft); font-size:.7rem; }
-  .stats { display:flex; flex-wrap:wrap; gap:18px; margin-top:12px; color:var(--muted); font-size:.85rem; }
+  .card-link.active { border-color:var(--accent); background:var(--accent-tint);
+    box-shadow:inset 0 0 0 1px var(--accent); }
+  .card-label { overflow:hidden; color:var(--muted); text-overflow:ellipsis; white-space:nowrap;
+    font-size:.6rem; font-weight:600; letter-spacing:.045em; text-transform:uppercase; }
+  .card-value { display:flex; align-items:baseline; gap:5px; margin-top:2px; }
+  .card-score { color:var(--ink); font:700 1.45rem/1 'Poppins',sans-serif; }
+  .card-sub { color:var(--soft); font-size:.62rem; }
   .table-wrap { overflow-x:auto; margin-top:4px; background:var(--bg); border:1px solid var(--line); border-radius:12px; }
   table { width:100%; border-collapse:collapse; color:var(--body); font-size:.77rem; }
   th,td { padding:9px 10px; text-align:center; border-bottom:1px solid var(--line); }
@@ -1455,11 +1442,6 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
   tr:hover td { background:var(--accent-tint); }
   .badge { display:inline-block; min-width:34px; padding:2px 8px; color:#fff; border-radius:12px; font-size:.72rem; font-weight:700; }
   .mini { display:inline-block; margin-left:4px; padding:0 6px; color:var(--body); background:var(--line); border-radius:10px; font-size:.66rem; }
-  .filters { display:flex; flex-wrap:wrap; gap:7px; margin:4px 0 10px; }
-  .fbtn { padding:7px 13px; color:var(--muted); background:#fff; border:1px solid var(--line-strong);
-    border-radius:999px; cursor:pointer; font:600 .74rem 'Poppins',sans-serif; }
-  .fbtn:hover { color:var(--accent); border-color:var(--accent-line); background:var(--accent-tint); }
-  .fbtn.active { color:#fff; background:var(--accent); border-color:var(--accent); }
   code { padding:1px 6px; color:var(--ink); background:var(--bg-soft); border:1px solid var(--line);
     border-radius:6px; font:400 .72rem 'IBM Plex Mono',monospace; }
   .legend { margin-top:22px; color:var(--muted); font-size:.72rem; }
@@ -1477,37 +1459,38 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
   .cls { font-weight: 600; }
   .tc-ok { color:var(--good); } .tc-redirect { color:var(--blue); }
   .tc-client { color:var(--warn); } .tc-server { color:var(--bad); }
-  .tc-conn { color:var(--purple); } .tc-placeholder { color:var(--accent); }
+  .tc-conn { color:var(--purple); } .tc-placeholder { color:var(--bad); }
+  .tc-all { color:var(--accent); }
   .tc-broken { color:var(--bad); }
   .badge-ok { background:var(--good); } .badge-redirect { background:var(--blue); }
   .badge-client { background:var(--warn); } .badge-server { background:var(--bad); }
-  .badge-conn { background:var(--purple); } .badge-placeholder { background:var(--accent); }
+  .badge-conn { background:var(--purple); } .badge-placeholder { background:var(--bad); }
+  .badge-error { background:var(--bad); }
 
+  @media (max-width:1100px) {
+    .report-meta { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  }
   @media (max-width:600px) {
     body { padding:0 14px 32px; }
-    .brandbar .sp { display:none; }
-    .brandctx { flex-basis:100%; padding-left:44px; }
-    .report-meta { gap:8px; }
+    .report-meta { grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
+    .status-filters { grid-template-columns:repeat(7,112px); }
   }
 
-  /* PDF / print: the colours already match the light screen theme, so this only
-     fixes layout for paper — tables can't scroll, so let wide cells wrap instead
-     of overflowing; repeat the header per page; keep rows whole; expand the page
-     lists; and drop the interactive filter buttons that do nothing on paper. */
+  @page { size:A4 landscape; }
+  /* PDF / print: preserve the complete HTML report while adapting its wide
+     table and interactive controls to landscape paper. */
   @media print {
     body { padding:0 6px; background:#fff; }
     .brandbar { margin-bottom:14px; }
     .report-shell { max-width:none; }
+    .report-meta .rm-item:not(.rm-site) { display:none; }
     .table-wrap { overflow: visible; }
+    .status-filters { overflow:visible; }
     details.pages > summary { list-style: none; }
-    .filters { display: none; }
     .card-link { cursor: default; }
-    /* The on-screen filter is interactive; the printed report instead lists
-       every tested link EXCEPT the passing OK (2xx) ones — a PDF is meant as an
-       actionable record of problems (redirects, 4xx/5xx, connection errors and
-       empty/placeholder links), not the clean results. */
+    /* Ignore any interactive screen filter and print the same complete result
+       set that the HTML report shows when its default All card is selected. */
     #all-links tbody tr { display: table-row !important; }
-    #all-links tbody tr[data-class="ok"] { display: none !important; }
     td.url-cell, td.note { max-width: none; white-space: normal;
                            overflow: visible; text-overflow: clip;
                            word-break: break-word; }
@@ -1522,8 +1505,6 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
 <header class="brandbar">
   <span class="logo"></span>
   <span class="brandname">Website Health Check</span>
-  <span class="sp"></span>
-  <span class="brandctx">Broken link report · powered by 2create</span>
 </header>
 <h1>Broken Link Bulk Report</h1>
 <div class="report-meta">
@@ -1540,9 +1521,8 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
   <div class="rm-item"><div class="rm-label">Generated</div><div class="rm-value">$generatedAt</div></div>
 </div>
 
-$cards
-$pageErrors
 $full
+$pageErrors
 
 <div class="legend">
   <span class="dot badge-ok"></span> OK &nbsp;
@@ -1566,25 +1546,15 @@ $full
     });
   }
   function setFilter(f) {
-    document.querySelectorAll('.fbtn').forEach(b => b.classList.toggle('active', b.dataset.filter === f));
+    document.querySelectorAll('.card-link[data-filter]').forEach(card => {
+      const active = card.dataset.filter === f;
+      card.classList.toggle('active', active);
+      card.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
     applyFilter(f);
   }
-  document.querySelectorAll('.fbtn').forEach(btn =>
-    btn.addEventListener('click', () => setFilter(btn.dataset.filter)));
-
-  // Clicking a "Links by Status" card filters the table to that status and
-  // scrolls down to it.
-  const table = document.getElementById('all-links');
-  document.querySelectorAll('.card[data-filter]').forEach(card => {
-    const go = () => {
-      setFilter(card.dataset.filter);
-      if (table) table.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    };
-    card.addEventListener('click', go);
-    card.addEventListener('keydown', e => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
-    });
-  });
+  document.querySelectorAll('.card-link[data-filter]').forEach(card =>
+    card.addEventListener('click', () => setFilter(card.dataset.filter)));
 
   // Default view: show the complete result set.
   setFilter('all');
@@ -1715,8 +1685,8 @@ function pdf_unique_errors(array $crawl): array {
     return $errors;
 }
 
-/** Build the PDF-only summary without expanding source-page instances. */
-function build_pdf_html(array $crawl, array $agg, array $args, string $generatedAt): string {
+/** Retain the earlier concise summary builder for possible future PDF options. */
+function build_pdf_summary_html(array $crawl, array $agg, array $args, string $generatedAt): string {
     $types = pdf_problem_types($crawl);
     $rows = '';
     foreach ($types as $type) {
@@ -1846,26 +1816,31 @@ function build_pdf_html(array $crawl, array $agg, array $args, string $generated
 HTML;
 }
 
-/** Render the PDF from its concise template without modifying the HTML report. */
-function render_issue_summary_pdf(array $crawl, array $agg, array $args,
-                                  string $pdfPath, string $generatedAt): bool {
+/** Build the PDF from the exact same exhaustive template as the HTML report. */
+function build_pdf_html(array $crawl, array $agg, array $args, string $generatedAt): string {
+    return build_html($crawl, $agg, $args, $generatedAt);
+}
+
+/** Render the full report as an A4 landscape PDF. */
+function render_report_pdf(array $crawl, array $agg, array $args,
+                           string $pdfPath, string $generatedAt): bool {
     $tmpBase = tempnam(sys_get_temp_dir(), 'blbs_pdf_');
     if ($tmpBase === false) {
-        progress("  ⚠ Could not create the temporary PDF summary — skipped.\n");
+        progress("  ⚠ Could not create the temporary PDF report — skipped.\n");
         return false;
     }
     // Chromium determines how to load file:// content from the extension. Keep
-    // the unique temp name, but give the summary an HTML suffix so it is
+    // the unique temp name, but give the report an HTML suffix so it is
     // rendered as a document rather than printed as plain source code.
     $tmp = $tmpBase . '.html';
     if (!@rename($tmpBase, $tmp)) {
         @unlink($tmpBase);
-        progress("  ⚠ Could not prepare the temporary PDF summary — skipped.\n");
+        progress("  ⚠ Could not prepare the temporary PDF report — skipped.\n");
         return false;
     }
     try {
         if (file_put_contents($tmp, build_pdf_html($crawl, $agg, $args, $generatedAt)) === false) {
-            progress("  ⚠ Could not write the temporary PDF summary — skipped.\n");
+            progress("  ⚠ Could not write the temporary PDF report — skipped.\n");
             return false;
         }
         return render_pdf($tmp, $pdfPath, $args);
@@ -1983,7 +1958,7 @@ function main(array $argv): void {
 
     // 5 — Optional PDF export
     if (trim((string)$args['pdf']) !== '') {
-        if (render_issue_summary_pdf($crawl, $agg, $args, $args['pdf'], $generatedAt)) {
+        if (render_report_pdf($crawl, $agg, $args, $args['pdf'], $generatedAt)) {
             echo "✅  PDF export  → {$args['pdf']}\n";
         }
     }

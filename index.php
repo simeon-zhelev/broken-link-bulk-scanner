@@ -370,7 +370,7 @@ function e($s) { return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE
       $pdfRel = null;
       if ($renderReady) {
           $pdfPath = REPORTS_DIR . '/' . $id . '.pdf';
-          if (render_issue_summary_pdf($crawl, $agg, $args, $pdfPath, $generatedAt)) {
+          if (render_report_pdf($crawl, $agg, $args, $pdfPath, $generatedAt)) {
               $pdfRel = 'reports/' . $id . '.pdf';
           }
       }

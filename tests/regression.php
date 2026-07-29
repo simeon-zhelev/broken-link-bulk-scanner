@@ -59,10 +59,42 @@ check(str_contains($html, 'Pages That Failed To Load'), 'HTML must include the p
 check(str_contains($html, 'HTTP 404'), 'HTML must include the page failure reason');
 check(!str_contains($html, 'bad?<script>'), 'page failure URLs must be HTML escaped');
 check(
-    str_contains($html, '<button class="fbtn active" data-filter="all">All</button>'),
-    'All Tested Links must highlight the All filter by default'
+    str_contains($html, '<button type="button" class="card card-link active" data-filter="all"'),
+    'All Tested Links must highlight the All status card by default'
 );
 check(str_contains($html, "setFilter('all');"), 'All Tested Links must show every row by default');
+check(
+    substr_count($html, 'class="card card-link') === 7,
+    'All Tested Links must render All plus six status filter cards'
+);
+check(
+    str_contains($html, '<div class="section-title">🔗 All Tested Links</div>'),
+    'status cards and tested links must share one section'
+);
+check(!str_contains($html, 'Links by Status'), 'separate Links by Status section must be removed');
+check(!str_contains($html, 'Broken only'), 'legacy filter pills must be removed');
+check(!str_contains($html, '<div class="stats">'), 'redundant broken/internal/external totals must be removed');
+check(
+    str_contains($html, 'grid-template-columns:repeat(9,minmax(0,1fr))'),
+    'report metadata must use a compact nine-column desktop row'
+);
+check(
+    str_contains($html, "card.setAttribute('aria-pressed', active ? 'true' : 'false')"),
+    'status filter cards must expose their active state accessibly'
+);
+check(
+    str_contains(status_badge(['code' => 0, 'class' => 'placeholder']), 'badge-error'),
+    'ERR status badges must use the red error class'
+);
+check(
+    str_contains($html, '.tc-placeholder { color:var(--bad); }')
+        && str_contains($html, '.badge-placeholder { background:var(--bad); }'),
+    'Empty / placeholder indicators must use the red error colour'
+);
+check(
+    !str_contains($html, 'Broken link report · powered by 2create'),
+    'report header must omit the powered-by text'
+);
 check(str_contains($csv, 'page_error'), 'CSV must include page-error records');
 check($agg['pageFailures'] === 1, 'aggregate must count page failures');
 
@@ -102,21 +134,27 @@ $detailedCrawl = [
 $detailedAgg = aggregate($detailedCrawl);
 $detailedHtml = build_html($detailedCrawl, $detailedAgg, $args, '2026-01-01 00:00');
 $pdfHtml = build_pdf_html($detailedCrawl, $detailedAgg, $args, '2026-01-01 00:00');
-$problemTypes = pdf_problem_types($detailedCrawl);
-$uniqueErrors = pdf_unique_errors($detailedCrawl);
 check(str_contains($detailedHtml, 'https://example.com/missing-one'), 'HTML must retain the first error instance');
 check(str_contains($detailedHtml, 'https://example.com/missing-two'), 'HTML must retain the second error instance');
 check(str_contains($detailedHtml, 'https://example.com/source-alpha'), 'HTML must retain detailed source pages');
-check(substr_count($pdfHtml, 'https://example.com/missing-one') === 1, 'PDF must list each unique error once');
-check(substr_count($pdfHtml, 'https://example.com/missing-two') === 1, 'PDF must list every unique error');
-check(!str_contains($pdfHtml, 'https://example.com/source-alpha'), 'PDF must not expand source-page instances');
-check(!str_contains($pdfHtml, 'All Tested Links'), 'PDF must omit the exhaustive tested-links table');
-check(count($problemTypes) === 1, 'duplicate statuses must collapse into one PDF problem type');
-check($problemTypes[0]['detail'] === 'HTTP 404', 'PDF problem type must retain the HTTP status');
-check($problemTypes[0]['count'] === 2, 'PDF problem type must count collapsed instances');
-check(count($uniqueErrors) === 2, 'PDF must produce one row per unique error');
-check($uniqueErrors[0]['pages'] === 2, 'PDF must count distinct source pages for an error');
-check(str_contains($pdfHtml, '<td class="pages">2</td>'), 'PDF must render the error page count');
+check($pdfHtml === $detailedHtml, 'PDF and HTML exports must use the same report template');
+check(str_contains($pdfHtml, 'All Tested Links'), 'PDF must include the exhaustive tested-links table');
+check(str_contains($pdfHtml, 'https://example.com/source-alpha'), 'PDF must retain detailed source pages');
+check(str_contains($pdfHtml, '@page { size:A4 landscape; }'), 'PDF print CSS must request A4 landscape');
+check(
+    str_contains($pdfHtml, '.report-meta .rm-item:not(.rm-site) { display:none; }'),
+    'PDF must hide secondary scan metadata while retaining the site'
+);
+check(
+    !str_contains($pdfHtml, 'tr[data-class="ok"] { display: none'),
+    'PDF must retain passing links just like the HTML report'
+);
+$runnerSource = file_get_contents(dirname(__DIR__) . '/render-runner.js');
+check($runnerSource !== false, 'PDF renderer source must be readable');
+check(
+    str_contains((string)$runnerSource, 'landscape: true'),
+    'PDF renderer must print in landscape mode'
+);
 
 // Edit & rescan must reveal the populated form client-side, matching the
 // Accessibility Bulk Scanner interaction instead of navigating to an empty URL.
