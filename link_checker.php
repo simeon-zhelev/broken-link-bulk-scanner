@@ -1480,13 +1480,30 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
   /* PDF / print: preserve the complete HTML report while adapting its wide
      table and interactive controls to landscape paper. */
   @media print {
-    body { padding:0 6px; background:#fff; }
-    .brandbar { margin-bottom:14px; }
+    html { font-size:13px; }
+    body { padding:0 4px; background:#fff; font-size:11px; line-height:1.3; }
+    .brandbar { gap:8px; padding:8px 0; margin-bottom:8px; }
+    .brandbar .logo { width:24px; height:24px; }
+    .brandbar .logo::before { width:16px; height:16px; }
+    .brandname { font-size:13px; }
+    h1 { margin:2px 0; font-size:1.35rem; }
     .report-shell { max-width:none; }
+    .report-meta { margin:6px 0 12px; }
     .report-meta .rm-item:not(.rm-site) { display:none; }
+    .rm-site { padding:6px 8px; }
+    .section-title { margin:16px 0 5px; font-size:.68rem; }
     .table-wrap { overflow: visible; }
-    .status-filters { overflow:visible; }
+    .status-filters { gap:4px; overflow:visible; margin-bottom:5px; padding:0; }
+    .card { padding:5px 7px; border-radius:7px; }
+    .card-label { font-size:.55rem; }
+    .card-score { font-size:1.15rem; }
+    .card-sub { font-size:.58rem; }
+    table { font-size:.72rem; line-height:1.25; }
+    th,td { padding:4px 5px; }
+    .badge { min-width:28px; padding:1px 5px; font-size:.64rem; }
+    .mini { padding:0 4px; font-size:.58rem; }
     details.pages > summary { list-style: none; }
+    details.pages .pagelist { margin-top:2px; line-height:1.25; }
     .card-link { cursor: default; }
     /* Ignore any interactive screen filter and print the same complete result
        set that the HTML report shows when its default All card is selected. */
@@ -1495,6 +1512,7 @@ function build_html(array $crawl, array $agg, array $args, string $generatedAt):
                            overflow: visible; text-overflow: clip;
                            word-break: break-word; }
     code { white-space: normal; word-break: break-word; }
+    .legend { margin-top:10px; font-size:.64rem; }
     thead { display: table-header-group; }
     tr { break-inside: avoid; }
   }

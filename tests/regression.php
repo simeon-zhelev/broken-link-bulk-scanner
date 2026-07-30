@@ -146,6 +146,12 @@ check(
     'PDF must hide secondary scan metadata while retaining the site'
 );
 check(
+    str_contains($pdfHtml, 'html { font-size:13px; }')
+        && str_contains($pdfHtml, 'table { font-size:.72rem; line-height:1.25; }')
+        && str_contains($pdfHtml, 'th,td { padding:4px 5px; }'),
+    'PDF must use condensed print typography and table spacing'
+);
+check(
     !str_contains($pdfHtml, 'tr[data-class="ok"] { display: none'),
     'PDF must retain passing links just like the HTML report'
 );
